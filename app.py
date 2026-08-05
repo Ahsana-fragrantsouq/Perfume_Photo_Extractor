@@ -2,8 +2,10 @@ import os
 import base64
 import json
 import re
+import io
 
 from flask import Flask, request, jsonify, render_template
+from PIL import Image
 import anthropic
 
 app = Flask(__name__)
@@ -55,11 +57,31 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def get_media_type(filename):
-    ext = filename.rsplit(".", 1)[1].lower()
-    if ext == "jpg":
-        ext = "jpeg"
-    return f"image/{ext}"
+MAX_DIMENSION = 1568  # Claude's recommended max edge length; larger images just get downsampled anyway
+MAX_BASE64_BYTES = 10 * 1024 * 1024  # Anthropic's hard limit for base64-encoded images
+
+
+def compress_image(image_bytes):
+    """Resize and compress an image so its base64 size stays under Claude's 10MB limit.
+    Returns (jpeg_bytes, media_type)."""
+    img = Image.open(io.BytesIO(image_bytes))
+    img = img.convert("RGB")  # normalize (handles PNG transparency, HEIC-via-Pillow, etc.)
+
+    # Resize so the longest edge is at most MAX_DIMENSION
+    if max(img.size) > MAX_DIMENSION:
+        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
+
+    quality = 85
+    while quality >= 40:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        data = buf.getvalue()
+        # base64 inflates size by ~33% — check against that, not the raw byte count
+        if len(data) * 4 / 3 < MAX_BASE64_BYTES:
+            return data, "image/jpeg"
+        quality -= 15
+
+    return data, "image/jpeg"  # best effort at lowest quality tried
 
 
 def extract_json(text):
@@ -94,8 +116,8 @@ def extract():
 
     try:
         image_bytes = photo.read()
-        image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-        media_type = get_media_type(photo.filename)
+        compressed_bytes, media_type = compress_image(image_bytes)
+        image_b64 = base64.standard_b64encode(compressed_bytes).decode("utf-8")
 
         message = client.messages.create(
             model=MODEL,
