@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>Fragrant Souq — Perfume Photo Extractor</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; }
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 16px; color: #222; }
   h1 { font-size: 20px; margin-bottom: 4px; }
   p.sub { color: #666; margin-top: 0; }
   form { border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin-top: 20px; }
@@ -13,20 +13,27 @@
   input[type="file"] { margin-top: 4px; }
   button { margin-top: 20px; background: #111; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; }
   button:disabled { background: #999; cursor: not-allowed; }
-  #status { margin-top: 14px; font-size: 14px; color: #666; }
+  button.secondary { background: #fff; color: #111; border: 1px solid #111; }
+  #status, #recordStatus { margin-top: 14px; font-size: 14px; color: #666; }
   table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; }
-  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+  th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
   th { background: #f5f5f5; }
+  td input[type="text"] { border: 1px solid transparent; background: transparent; padding: 4px; font-size: 13px; width: 100%; box-sizing: border-box; border-radius: 4px; }
+  td input[type="text"]:hover { border-color: #ccc; }
+  td input[type="text"]:focus { border-color: #111; background: #fff; outline: none; }
+  td input[type="text"].edited { background: #fff8e1; }
+  td.checkbox-cell { text-align: center; width: 30px; }
   .error { color: #b00020; margin-top: 14px; }
   .confidence-low { color: #b00020; }
   .confidence-medium { color: #a67c00; }
   .confidence-high { color: #1a7a1a; }
+  .actions { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
 </style>
 </head>
 <body>
 
 <h1>Perfume Photo Extractor</h1>
-<p class="sub">Upload a shelf photo and the shop name — items will be listed below.</p>
+<p class="sub">Upload a shelf photo and the shop name — items will be listed below. Fix anything wrong, then select which items to record.</p>
 
 <form id="uploadForm">
   <label for="shop_name">Shop name</label>
@@ -42,10 +49,16 @@
 <div id="results"></div>
 
 <script>
+const FIELDS = ["brand", "name", "size", "concentration", "gender", "condition", "estimated_price"];
+const FIELD_LABELS = { brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition", estimated_price: "Est. Price" };
+
 const form = document.getElementById("uploadForm");
 const statusEl = document.getElementById("status");
 const resultsEl = document.getElementById("results");
 const submitBtn = document.getElementById("submitBtn");
+
+let currentShopName = "";
+let originalItems = [];   // exactly what Claude returned, never mutated
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -54,8 +67,10 @@ form.addEventListener("submit", async (e) => {
   statusEl.className = "";
   submitBtn.disabled = true;
 
+  currentShopName = document.getElementById("shop_name").value.trim();
+
   const formData = new FormData();
-  formData.append("shop_name", document.getElementById("shop_name").value);
+  formData.append("shop_name", currentShopName);
   formData.append("photo", document.getElementById("photo").files[0]);
 
   try {
@@ -69,27 +84,10 @@ form.addEventListener("submit", async (e) => {
       return;
     }
 
-    statusEl.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}".`;
+    statusEl.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}". Review and correct below, then select which to record.`;
+    originalItems = data.items;
 
-    if (data.items.length === 0) {
-      resultsEl.innerHTML = "<p>No items detected in this photo.</p>";
-    } else {
-      let html = "<table><thead><tr><th>Brand</th><th>Name</th><th>Size</th><th>Concentration</th><th>Gender</th><th>Condition</th><th>Est. Price</th><th>Confidence</th></tr></thead><tbody>";
-      data.items.forEach(item => {
-        html += `<tr>
-          <td>${item.brand ?? "-"}</td>
-          <td>${item.name ?? "-"}</td>
-          <td>${item.size ?? "-"}</td>
-          <td>${item.concentration ?? "-"}</td>
-          <td>${item.gender ?? "-"}</td>
-          <td>${item.condition ?? "-"}</td>
-          <td>${item.estimated_price ?? "-"}</td>
-          <td class="confidence-${item.confidence ?? ''}">${item.confidence ?? "-"}</td>
-        </tr>`;
-      });
-      html += "</tbody></table>";
-      resultsEl.innerHTML = html;
-    }
+    renderTable(data.items);
   } catch (err) {
     statusEl.textContent = "";
     resultsEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
@@ -97,6 +95,102 @@ form.addEventListener("submit", async (e) => {
     submitBtn.disabled = false;
   }
 });
+
+function renderTable(items) {
+  if (items.length === 0) {
+    resultsEl.innerHTML = "<p>No items detected in this photo.</p>";
+    return;
+  }
+
+  let html = '<table id="itemsTable"><thead><tr><th></th>';
+  FIELDS.forEach(f => html += `<th>${FIELD_LABELS[f]}</th>`);
+  html += "<th>Confidence</th></tr></thead><tbody>";
+
+  items.forEach((item, i) => {
+    html += `<tr data-row="${i}"><td class="checkbox-cell"><input type="checkbox" class="row-select" checked></td>`;
+    FIELDS.forEach(f => {
+      const val = item[f] ?? "";
+      html += `<td><input type="text" class="field-input" data-field="${f}" value="${escapeHtml(val)}"></td>`;
+    });
+    html += `<td class="confidence-${item.confidence ?? ''}">${item.confidence ?? "-"}</td></tr>`;
+  });
+
+  html += "</tbody></table>";
+  html += `
+    <div class="actions">
+      <button id="saveBtn" type="button">Save selected items</button>
+      <button id="selectAllBtn" type="button" class="secondary">Select all</button>
+      <button id="deselectAllBtn" type="button" class="secondary">Deselect all</button>
+    </div>
+    <div id="recordStatus"></div>
+  `;
+
+  resultsEl.innerHTML = html;
+
+  // Mark cells as edited (visually) when the user changes them from the original value
+  document.querySelectorAll(".field-input").forEach(input => {
+    const originalValue = input.value;
+    input.addEventListener("input", () => {
+      input.classList.toggle("edited", input.value !== originalValue);
+    });
+  });
+
+  document.getElementById("selectAllBtn").addEventListener("click", () => {
+    document.querySelectorAll(".row-select").forEach(cb => cb.checked = true);
+  });
+  document.getElementById("deselectAllBtn").addEventListener("click", () => {
+    document.querySelectorAll(".row-select").forEach(cb => cb.checked = false);
+  });
+  document.getElementById("saveBtn").addEventListener("click", saveSelectedItems);
+}
+
+async function saveSelectedItems() {
+  const recordStatusEl = document.getElementById("recordStatus");
+  const saveBtn = document.getElementById("saveBtn");
+  const rows = document.querySelectorAll("#itemsTable tbody tr");
+
+  const items = Array.from(rows).map(row => {
+    const i = parseInt(row.dataset.row, 10);
+    const corrected = {};
+    row.querySelectorAll(".field-input").forEach(input => {
+      corrected[input.dataset.field] = input.value.trim() || null;
+    });
+    const selected = row.querySelector(".row-select").checked;
+    return { original: originalItems[i], corrected, selected };
+  });
+
+  saveBtn.disabled = true;
+  recordStatusEl.textContent = "Saving...";
+  recordStatusEl.className = "";
+
+  try {
+    const res = await fetch("/record", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shop_name: currentShopName, items }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      recordStatusEl.innerHTML = `<div class="error">Error: ${data.error || "Unknown error"}</div>`;
+      return;
+    }
+
+    recordStatusEl.textContent = `Saved ${data.items_saved} item(s) to the database. Logged ${data.corrections_logged} correction(s) for future accuracy.`;
+  } catch (err) {
+    recordStatusEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 </script>
 
 </body>

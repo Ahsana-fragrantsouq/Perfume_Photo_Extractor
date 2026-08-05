@@ -7,6 +7,9 @@ import io
 from flask import Flask, request, jsonify, render_template
 from PIL import Image
 import anthropic
+import psycopg2
+
+import db
 
 app = Flask(__name__)
 
@@ -17,7 +20,15 @@ MODEL = "claude-sonnet-5"
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
-EXTRACTION_PROMPT = """You are looking at a photo of perfumes/fragrances taken inside a shop.
+# Create tables on startup if they don't exist yet. If DATABASE_URL isn't set
+# (e.g. running locally without Postgres), the app still works for /extract —
+# only /record will fail until a database is connected.
+try:
+    db.init_db()
+except Exception as e:
+    print(f"[startup] Skipping DB init: {e}")
+
+EXTRACTION_PROMPT_BASE = """You are looking at a photo of perfumes/fragrances taken inside a shop.
 
 Identify every distinct perfume/fragrance bottle or box you can see in the image.
 For each item, extract as much of the following as you can confidently determine from the image:
@@ -51,6 +62,16 @@ Respond with ONLY valid JSON, no markdown code fences, no explanation text, in t
 If you cannot identify any items at all, return {"items": []}.
 Do not guess wildly — if a field is not determinable from the image, use null for that field rather than inventing a value.
 """
+
+
+def build_extraction_prompt(shop_name):
+    """Base prompt + any past corrections for this shop, so Claude improves over time per-shop."""
+    try:
+        examples_text = db.build_correction_examples_text(shop_name)
+    except Exception as e:
+        print(f"[extract] Could not load past corrections: {e}")
+        examples_text = ""
+    return EXTRACTION_PROMPT_BASE + examples_text
 
 
 def allowed_file(filename):
@@ -136,7 +157,7 @@ def extract():
                         },
                         {
                             "type": "text",
-                            "text": EXTRACTION_PROMPT,
+                            "text": build_extraction_prompt(shop_name),
                         },
                     ],
                 }
@@ -169,6 +190,59 @@ def extract():
 
     except anthropic.APIError as e:
         return jsonify({"error": f"Anthropic API error: {str(e)}"}), 502
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/record", methods=["POST"])
+def record():
+    """Receives the user's reviewed/corrected items.
+    Expects JSON body:
+    {
+      "shop_name": "...",
+      "items": [
+        {
+          "original": {brand, name, size, ...},   // what Claude extracted
+          "corrected": {brand, name, size, ...},   // what the user confirmed/fixed
+          "selected": true                          // whether the user wants this one recorded
+        },
+        ...
+      ]
+    }
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Expected JSON body."}), 400
+
+    shop_name = (data.get("shop_name") or "").strip()
+    items = data.get("items", [])
+
+    if not shop_name:
+        return jsonify({"error": "shop_name is required."}), 400
+    if not isinstance(items, list) or len(items) == 0:
+        return jsonify({"error": "items must be a non-empty list."}), 400
+
+    try:
+        # Log every field the user changed, regardless of whether the item was selected —
+        # even discarding an item doesn't mean its corrections aren't useful to learn from.
+        corrections_logged = db.log_corrections(shop_name, items)
+
+        selected_items = [item["corrected"] for item in items if item.get("selected")]
+        saved_count = db.save_recorded_items(shop_name, selected_items) if selected_items else 0
+
+        return jsonify({
+            "shop_name": shop_name,
+            "items_saved": saved_count,
+            "corrections_logged": corrections_logged,
+        }), 200
+
+    except psycopg2.Error as e:
+        return jsonify({"error": f"Database error: {str(e)}"}), 502
+
+    except RuntimeError as e:
+        # Raised by db.get_conn() when DATABASE_URL isn't configured
+        return jsonify({"error": str(e)}), 503
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
