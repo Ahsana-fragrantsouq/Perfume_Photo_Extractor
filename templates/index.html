@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fragrant Souq — Perfume Photo Extractor</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  p.sub { color: #666; margin-top: 0; }
+  form { border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin-top: 20px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; margin-top: 14px; }
+  input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+  input[type="file"] { margin-top: 4px; }
+  button { margin-top: 20px; background: #111; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  button:disabled { background: #999; cursor: not-allowed; }
+  #status { margin-top: 14px; font-size: 14px; color: #666; }
+  table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; }
+  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+  th { background: #f5f5f5; }
+  .error { color: #b00020; margin-top: 14px; }
+  .confidence-low { color: #b00020; }
+  .confidence-medium { color: #a67c00; }
+  .confidence-high { color: #1a7a1a; }
+</style>
+</head>
+<body>
+
+<h1>Perfume Photo Extractor</h1>
+<p class="sub">Upload a shelf photo and the shop name — items will be listed below.</p>
+
+<form id="uploadForm">
+  <label for="shop_name">Shop name</label>
+  <input type="text" id="shop_name" name="shop_name" placeholder="e.g. Al Haramain Dubai Mall" required>
+
+  <label for="photo">Photo</label>
+  <input type="file" id="photo" name="photo" accept="image/*" required>
+
+  <button type="submit" id="submitBtn">Extract items</button>
+  <div id="status"></div>
+</form>
+
+<div id="results"></div>
+
+<script>
+const form = document.getElementById("uploadForm");
+const statusEl = document.getElementById("status");
+const resultsEl = document.getElementById("results");
+const submitBtn = document.getElementById("submitBtn");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  resultsEl.innerHTML = "";
+  statusEl.textContent = "Analyzing photo... this can take 10-20 seconds.";
+  statusEl.className = "";
+  submitBtn.disabled = true;
+
+  const formData = new FormData();
+  formData.append("shop_name", document.getElementById("shop_name").value);
+  formData.append("photo", document.getElementById("photo").files[0]);
+
+  try {
+    const res = await fetch("/extract", { method: "POST", body: formData });
+    const data = await res.json();
+
+    if (!res.ok) {
+      statusEl.textContent = "";
+      resultsEl.innerHTML = `<div class="error">Error: ${data.error || "Unknown error"}</div>`;
+      submitBtn.disabled = false;
+      return;
+    }
+
+    statusEl.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}".`;
+
+    if (data.items.length === 0) {
+      resultsEl.innerHTML = "<p>No items detected in this photo.</p>";
+    } else {
+      let html = "<table><thead><tr><th>Brand</th><th>Name</th><th>Size</th><th>Concentration</th><th>Gender</th><th>Condition</th><th>Est. Price</th><th>Confidence</th></tr></thead><tbody>";
+      data.items.forEach(item => {
+        html += `<tr>
+          <td>${item.brand ?? "-"}</td>
+          <td>${item.name ?? "-"}</td>
+          <td>${item.size ?? "-"}</td>
+          <td>${item.concentration ?? "-"}</td>
+          <td>${item.gender ?? "-"}</td>
+          <td>${item.condition ?? "-"}</td>
+          <td>${item.estimated_price ?? "-"}</td>
+          <td class="confidence-${item.confidence ?? ''}">${item.confidence ?? "-"}</td>
+        </tr>`;
+      });
+      html += "</tbody></table>";
+      resultsEl.innerHTML = html;
+    }
+  } catch (err) {
+    statusEl.textContent = "";
+    resultsEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>
