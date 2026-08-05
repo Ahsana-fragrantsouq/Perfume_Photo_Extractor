@@ -99,7 +99,7 @@ def extract():
 
         message = client.messages.create(
             model=MODEL,
-            max_tokens=2000,
+            max_tokens=8000,
             messages=[
                 {
                     "role": "user",
@@ -122,6 +122,14 @@ def extract():
         )
 
         raw_text = message.content[0].text
+
+        if message.stop_reason == "max_tokens":
+            return jsonify({
+                "error": "Response was cut off because too many items were detected in one photo. "
+                         "Try taking a closer photo covering fewer items at once.",
+                "raw_response": raw_text,
+            }), 502
+
         parsed = extract_json(raw_text)
         items = parsed.get("items", [])
 
