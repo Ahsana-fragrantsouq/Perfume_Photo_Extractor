@@ -248,6 +248,58 @@ def record():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/admin/data")
+def admin_data():
+    """Simple browser-viewable page to check what's been saved — no external tools needed.
+    Protected by a key so random visitors can't see your data: /admin/data?key=YOUR_KEY
+    Set ADMIN_KEY in Render's environment variables to whatever you want that key to be."""
+    admin_key = os.environ.get("ADMIN_KEY")
+    if not admin_key:
+        return "ADMIN_KEY is not set in the environment. Add one in Render to use this page.", 503
+    if request.args.get("key") != admin_key:
+        return "Forbidden: missing or incorrect ?key=", 403
+
+    try:
+        items = db.get_recorded_items(limit=200)
+        corrections = db.get_all_corrections(limit=200)
+    except Exception as e:
+        return f"Database error: {str(e)}", 502
+
+    def render_table(rows, columns):
+        if not rows:
+            return "<p>No rows yet.</p>"
+        html = "<table><thead><tr>" + "".join(f"<th>{c}</th>" for c in columns) + "</tr></thead><tbody>"
+        for row in rows:
+            html += "<tr>" + "".join(f"<td>{row.get(c, '') if row.get(c) is not None else ''}</td>" for c in columns) + "</tr>"
+        html += "</tbody></table>"
+        return html
+
+    items_html = render_table(items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "estimated_price", "created_at"])
+    corrections_html = render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"])
+
+    return f"""
+    <html>
+    <head>
+    <title>Saved Data</title>
+    <style>
+      body {{ font-family: -apple-system, Arial, sans-serif; margin: 30px; color: #222; }}
+      h2 {{ margin-top: 40px; }}
+      table {{ border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }}
+      th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
+      th {{ background: #f5f5f5; }}
+    </style>
+    </head>
+    <body>
+      <h1>Saved Data</h1>
+      <h2>Recorded Items ({len(items)})</h2>
+      {items_html}
+      <h2>Corrections Log ({len(corrections)})</h2>
+      {corrections_html}
+    </body>
+    </html>
+    """
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200

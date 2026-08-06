@@ -135,6 +135,36 @@ def save_recorded_items(shop_name, items):
     return saved
 
 
+def get_recorded_items(limit=100):
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, estimated_price, created_at
+                FROM recorded_items
+                ORDER BY created_at DESC
+                LIMIT %s;
+            """, (limit,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_all_corrections(limit=200):
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, shop_name, item_context, field_name, original_value, corrected_value, created_at
+                FROM corrections
+                ORDER BY created_at DESC
+                LIMIT %s;
+            """, (limit,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def build_correction_examples_text(shop_name, limit=15):
     """Format recent corrections as a short block of examples to inject into the extraction prompt."""
     corrections = get_recent_corrections(shop_name, limit=limit)
