@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
-FIELDS = ["brand", "name", "size", "concentration", "gender", "condition", "estimated_price"]
+FIELDS = ["brand", "name", "size", "concentration", "gender", "condition"]
 
 
 def get_conn():
@@ -49,7 +49,6 @@ def init_db():
                     concentration TEXT,
                     gender TEXT,
                     condition TEXT,
-                    estimated_price TEXT,
                     created_at TIMESTAMPTZ NOT NULL
                 );
             """)
@@ -86,7 +85,6 @@ def log_corrections(shop_name, items):
             for item in items:
                 original = item.get("original", {}) or {}
                 corrected = item.get("corrected", {}) or {}
-                # short human-readable label for the item, so corrections are readable later
                 item_context = f"{corrected.get('brand') or original.get('brand') or ''} {corrected.get('name') or original.get('name') or ''}".strip()
 
                 for field in FIELDS:
@@ -115,8 +113,8 @@ def save_recorded_items(shop_name, items):
             for item in items:
                 cur.execute("""
                     INSERT INTO recorded_items
-                        (shop_name, brand, name, size, concentration, gender, condition, estimated_price, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        (shop_name, brand, name, size, concentration, gender, condition, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
                 """, (
                     shop_name,
                     item.get("brand"),
@@ -125,7 +123,6 @@ def save_recorded_items(shop_name, items):
                     item.get("concentration"),
                     item.get("gender"),
                     item.get("condition"),
-                    item.get("estimated_price"),
                     now,
                 ))
                 saved += 1
@@ -140,7 +137,7 @@ def get_recorded_items(limit=100):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT id, shop_name, brand, name, size, concentration, gender, condition, estimated_price, created_at
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, created_at
                 FROM recorded_items
                 ORDER BY created_at DESC
                 LIMIT %s;

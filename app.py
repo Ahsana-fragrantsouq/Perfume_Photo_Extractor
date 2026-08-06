@@ -39,7 +39,6 @@ For each item, extract as much of the following as you can confidently determine
 - concentration (e.g. "EDP", "EDT", "Parfum", "Cologne") — null if not visible/unclear
 - gender ("Men", "Women", "Unisex") — null if unclear
 - condition ("Sealed", "Tester", "Used", "Unknown") — best guess from packaging/visual cues
-- estimated_price — only if a price tag/label is visibly readable in the photo, else null
 - confidence — your confidence in this item's identification: "high", "medium", or "low"
 
 Respond with ONLY valid JSON, no markdown code fences, no explanation text, in this exact structure:
@@ -53,7 +52,6 @@ Respond with ONLY valid JSON, no markdown code fences, no explanation text, in t
       "concentration": "...",
       "gender": "...",
       "condition": "...",
-      "estimated_price": "...",
       "confidence": "..."
     }
   ]
@@ -274,7 +272,7 @@ def admin_data():
         html += "</tbody></table>"
         return html
 
-    items_html = render_table(items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "estimated_price", "created_at"])
+    items_html = render_table(items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition",  "created_at"])
     corrections_html = render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"])
 
     return f"""
