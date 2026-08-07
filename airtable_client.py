@@ -25,13 +25,23 @@ def _escape_formula_value(value):
     return value.replace('"', '\\"')
 
 
+def _normalize_size(size):
+    """Strip spaces and lowercase, so '100 ml', '100ml', and '100 ML' all compare equal.
+    Airtable and Claude's extraction don't always agree on spacing/capitalization,
+    even for the exact same product."""
+    if not size:
+        return ""
+    return size.replace(" ", "").lower()
+
+
 def find_sku(brand, name, size):
     """
-    Search French Inventories for an exact match on Brand + Perfume Name + Size.
+    Search French Inventories for a match on Brand + Perfume Name (exact), then
+    compare Size ourselves with spacing/case ignored — e.g. "100ml" matches "100 ml".
     Returns the SKU string if a match is found, otherwise None.
 
-    NOTE: matching is exact for now (all three fields must match exactly, case-sensitive).
-    This can be loosened to fuzzy/partial matching later if needed.
+    Brand + Name matching is exact (case-sensitive). Size matching is exact EXCEPT
+    for spacing and capitalization, since real Airtable data isn't always consistent there.
     """
     if not AIRTABLE_API_KEY:
         print("[airtable] AIRTABLE_API_KEY not set — skipping SKU lookup, leaving SKU blank.")
@@ -43,16 +53,16 @@ def find_sku(brand, name, size):
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{FRENCH_INVENTORIES_TABLE_ID}"
 
-    # Build an exact-match formula: AND({Brand}="X", {Perfume Name}="Y", {Size}="Z")
-    formula = 'AND({%s}="%s", {%s}="%s", {%s}="%s")' % (
+    # Match on Brand + Perfume Name only — a perfume can have several rows for
+    # different sizes, so we fetch all of them and pick the right one ourselves.
+    formula = 'AND({%s}="%s", {%s}="%s")' % (
         FIELD_BRAND, _escape_formula_value(brand),
         FIELD_NAME, _escape_formula_value(name),
-        FIELD_SIZE, _escape_formula_value(size),
     )
-    params = {"filterByFormula": formula, "maxRecords": 1}
+    params = {"filterByFormula": formula, "maxRecords": 50}
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
 
-    print(f"[airtable] Searching French Inventories: brand={brand!r} name={name!r} size={size!r}")
+    print(f"[airtable] Searching French Inventories: brand={brand!r} name={name!r} (will match size={size!r} separately)")
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
@@ -60,12 +70,24 @@ def find_sku(brand, name, size):
         records = response.json().get("records", [])
 
         if not records:
-            print(f"[airtable] No match found for brand={brand!r} name={name!r} size={size!r} — SKU will be blank.")
+            print(f"[airtable] No match found for brand={brand!r} name={name!r} — SKU will be blank.")
             return None
 
-        sku = records[0]["fields"].get(FIELD_SKU)
-        print(f"[airtable] Match found — SKU={sku!r}")
-        return sku
+        target_size = _normalize_size(size)
+        available_sizes = []
+
+        for record in records:
+            record_size = record["fields"].get(FIELD_SIZE, "")
+            available_sizes.append(record_size)
+            if _normalize_size(record_size) == target_size:
+                sku = record["fields"].get(FIELD_SKU)
+                print(f"[airtable] Match found — SKU={sku!r} (size {record_size!r} matched {size!r})")
+                return sku
+
+        # Brand + Name matched something, but none of those rows had this size
+        print(f"[airtable] Brand/Name matched {len(records)} row(s), but none had size={size!r}. "
+              f"Sizes available in Airtable: {available_sizes} — SKU will be blank.")
+        return None
 
     except requests.RequestException as e:
         # Network/API errors shouldn't crash the whole save — just log and leave SKU blank
