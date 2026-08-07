@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Search — Fragrant Souq Perfume Database</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  p.sub { color: #666; margin-top: 0; }
+  .top-bar { display: flex; justify-content: space-between; align-items: baseline; }
+  .top-bar a { font-size: 14px; color: #111; text-decoration: none; }
+  .search-box { display: flex; gap: 8px; margin-top: 20px; }
+  input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 15px; }
+  button { background: #111; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  button:disabled { background: #999; cursor: not-allowed; }
+  #status { margin-top: 14px; font-size: 14px; color: #666; }
+  table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; }
+  th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+  th { background: #f5f5f5; }
+  .error { color: #b00020; margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div>
+    <h1>Search Perfumes</h1>
+    <p class="sub">Search saved items by name or SKU.</p>
+  </div>
+  <a href="/">&larr; Back to upload</a>
+</div>
+
+<div class="search-box">
+  <input type="text" id="searchInput" placeholder="e.g. Sauvage or GRA1003" autofocus>
+  <button id="searchBtn" type="button">🔍 Search</button>
+</div>
+
+<div id="status"></div>
+<div id="results"></div>
+
+<script>
+const searchInput = document.getElementById("searchInput");
+const searchBtn = document.getElementById("searchBtn");
+const statusEl = document.getElementById("status");
+const resultsEl = document.getElementById("results");
+
+async function runSearch() {
+  const query = searchInput.value.trim();
+  if (!query) return;
+
+  searchBtn.disabled = true;
+  statusEl.textContent = "Searching...";
+  statusEl.className = "";
+  resultsEl.innerHTML = "";
+
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    if (!res.ok) {
+      statusEl.textContent = "";
+      resultsEl.innerHTML = `<div class="error">Error: ${data.error || "Unknown error"}</div>`;
+      return;
+    }
+
+    statusEl.textContent = `${data.count} result(s) for "${data.query}"`;
+    renderResults(data.results);
+  } catch (err) {
+    statusEl.textContent = "";
+    resultsEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  } finally {
+    searchBtn.disabled = false;
+  }
+}
+
+function renderResults(results) {
+  if (results.length === 0) {
+    resultsEl.innerHTML = "<p>No matches found.</p>";
+    return;
+  }
+
+  const columns = ["shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url"];
+  const labels = { shop_name: "Shop", brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition", sku: "SKU", image_url: "Photo" };
+
+  let html = "<table><thead><tr>";
+  columns.forEach(c => html += `<th>${labels[c]}</th>`);
+  html += "</tr></thead><tbody>";
+
+  results.forEach(item => {
+    html += "<tr>";
+    columns.forEach(c => {
+      if (c === "image_url") {
+        html += item.image_url ? `<td><a href="${item.image_url}" target="_blank">View photo</a></td>` : "<td></td>";
+      } else {
+        html += `<td>${item[c] ?? ""}</td>`;
+      }
+    });
+    html += "</tr>";
+  });
+
+  html += "</tbody></table>";
+  resultsEl.innerHTML = html;
+}
+
+searchBtn.addEventListener("click", runSearch);
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runSearch();
+});
+</script>
+
+</body>
+</html>

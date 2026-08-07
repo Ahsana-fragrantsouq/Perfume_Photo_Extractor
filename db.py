@@ -205,6 +205,31 @@ def save_master_items(shop_name, items, image_url):
     return saved
 
 
+def search_master_items(query, limit=100):
+    """
+    Search master_table for items where the search text appears anywhere in
+    the Name or SKU (partial match, case-insensitive) — e.g. "sauvage" matches
+    "Dior Sauvage", and "gra100" matches SKU "GRA1003".
+    """
+    print(f"[db] Searching master_table for: {query!r}")
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            like_pattern = f"%{query}%"
+            cur.execute("""
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, image_url, created_at
+                FROM master_table
+                WHERE name ILIKE %s OR sku ILIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s;
+            """, (like_pattern, like_pattern, limit))
+            results = cur.fetchall()
+            print(f"[db] Search found {len(results)} result(s).")
+            return results
+    finally:
+        conn.close()
+
+
 def get_master_items(limit=200):
     """Fetch recent master_table rows for the /admin/data viewer page."""
     conn = get_conn()

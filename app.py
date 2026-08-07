@@ -334,6 +334,27 @@ def admin_data():
     """
 
 
+@app.route("/search")
+def search_page():
+    """Simple search page — a text box for name/SKU, results load via /api/search."""
+    return render_template("search.html")
+
+
+@app.route("/api/search")
+def api_search():
+    """JSON API used by the search page (and callable by other tools later).
+    GET /api/search?q=sauvage"""
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify({"error": "Missing search query. Use ?q=..."}), 400
+
+    try:
+        results = db.search_master_items(query)
+        return jsonify({"query": query, "count": len(results), "results": results}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200

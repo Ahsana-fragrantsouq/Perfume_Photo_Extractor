@@ -28,12 +28,20 @@
   .confidence-medium { color: #a67c00; }
   .confidence-high { color: #1a7a1a; }
   .actions { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
+  .top-bar { display: flex; justify-content: space-between; align-items: baseline; }
+  .top-bar a.search-link { font-size: 14px; color: #111; text-decoration: none; border: 1px solid #111; padding: 6px 14px; border-radius: 6px; white-space: nowrap; }
+  .top-bar a.search-link:hover { background: #111; color: #fff; }
 </style>
 </head>
 <body>
 
-<h1>Perfume Photo Extractor</h1>
-<p class="sub">Upload a shelf photo and the shop name — items will be listed below. Fix anything wrong, then select which items to record.</p>
+<div class="top-bar">
+  <div>
+    <h1>Perfume Photo Extractor</h1>
+    <p class="sub">Upload a shelf photo and the shop name — items will be listed below. Fix anything wrong, then select which items to record.</p>
+  </div>
+  <a href="/search" class="search-link">🔍 Search</a>
+</div>
 
 <form id="uploadForm">
   <label for="shop_name">Shop name</label>
@@ -109,7 +117,7 @@ function renderTable(items) {
   html += "<th>Confidence</th></tr></thead><tbody>";
 
   items.forEach((item, i) => {
-    html += `<tr data-row="${i}"><td class="checkbox-cell"><input type="checkbox" class="row-select" checked></td>`;
+    html += `<tr data-row="${i}"><td class="checkbox-cell"><input type="checkbox" class="row-select"></td>`;
     FIELDS.forEach(f => {
       const val = item[f] ?? "";
       html += `<td><input type="text" class="field-input" data-field="${f}" value="${escapeHtml(val)}"></td>`;
