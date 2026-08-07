@@ -45,12 +45,10 @@ def _is_tester_record(record):
 
 def find_sku(brand, name, size, condition=None):
     """
-    Search French Inventories for a match on Brand + Perfume Name (exact), then
-    compare Size ourselves with spacing/case ignored — e.g. "100ml" matches "100 ml".
+    Search French Inventories for a match on Brand + Perfume Name (case-insensitive,
+    whitespace-trimmed), then compare Size ourselves with spacing/case ignored too —
+    e.g. "100ml" matches "100 ml", and "tom ford " matches "Tom Ford".
     Returns the SKU string if a match is found, otherwise None.
-
-    Brand + Name matching is exact (case-sensitive). Size matching ignores spacing
-    and capitalization, since real Airtable data isn't always consistent there.
 
     Some products have TWO Airtable rows for the same brand/name/size — a regular
     one and a Tester (SKU ending in "T", e.g. TMF1035 vs TMF1035T). When that happens,
@@ -66,11 +64,14 @@ def find_sku(brand, name, size, condition=None):
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{FRENCH_INVENTORIES_TABLE_ID}"
 
-    # Match on Brand + Perfume Name only — a perfume can have several rows for
-    # different sizes (and testers), so we fetch all of them and pick ourselves.
-    formula = 'AND({%s}="%s", {%s}="%s")' % (
-        FIELD_BRAND, _escape_formula_value(brand),
-        FIELD_NAME, _escape_formula_value(name),
+    # Match on Brand + Perfume Name, ignoring case and leading/trailing whitespace —
+    # ~9,400 hand-entered Airtable records means occasional stray spaces or
+    # capitalization differences are expected, not exceptions.
+    # A perfume can also have several rows for different sizes/testers, so we fetch
+    # all brand+name matches and pick the right size/condition ourselves below.
+    formula = 'AND(LOWER(TRIM({%s}))="%s", LOWER(TRIM({%s}))="%s")' % (
+        FIELD_BRAND, _escape_formula_value(brand.strip().lower()),
+        FIELD_NAME, _escape_formula_value(name.strip().lower()),
     )
     params = {"filterByFormula": formula, "maxRecords": 50}
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
