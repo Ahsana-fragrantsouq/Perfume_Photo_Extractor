@@ -249,7 +249,7 @@ def record():
         # Step 3: for each selected item, search Airtable French Inventories for a
         # matching SKU (exact match on brand + name). Leaves SKU blank if no match.
         for item in selected_items:
-            item["sku"] = airtable_client.find_sku(item.get("brand"), item.get("name"), item.get("size"))
+            item["sku"] = airtable_client.find_sku(item.get("brand"), item.get("name"), item.get("size"), item.get("condition"))
 
         # Step 4: save the final corrected items (with their SKU + shared photo URL)
         saved_count = db.save_master_items(shop_name, selected_items, image_url) if selected_items else 0
