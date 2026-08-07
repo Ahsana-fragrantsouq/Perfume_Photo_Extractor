@@ -61,6 +61,8 @@ def init_db():
             # The final, corrected catalog — one row per item the user reviewed,
             # fixed, and chose to save. Includes the matched Airtable SKU (if found)
             # and a clickable link back to the original shelf photo.
+            # Uses "updated_at" (not "created_at") since this table may later support
+            # editing existing rows — updated_at is the date that will actually matter then.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS master_table (
                     id SERIAL PRIMARY KEY,
@@ -73,9 +75,19 @@ def init_db():
                     condition TEXT,
                     sku TEXT,
                     image_url TEXT,
-                    created_at TIMESTAMPTZ NOT NULL
+                    updated_at TIMESTAMPTZ NOT NULL
                 );
             """)
+
+            # Migration: earlier deploys created this table with "created_at" instead.
+            # Rename it in place so existing data (and its dates) aren't lost.
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'master_table' AND column_name = 'created_at';
+            """)
+            if cur.fetchone():
+                print("[db] Migrating master_table: renaming created_at -> updated_at")
+                cur.execute("ALTER TABLE master_table RENAME COLUMN created_at TO updated_at;")
         conn.commit()
         print("[db] Tables ready.")
     finally:
@@ -183,7 +195,7 @@ def save_master_items(shop_name, items, image_url):
                 print(f"[db]   -> {item.get('brand')} {item.get('name')} | SKU={sku!r} | image_url={image_url!r}")
                 cur.execute("""
                     INSERT INTO master_table
-                        (shop_name, brand, name, size, concentration, gender, condition, sku, image_url, created_at)
+                        (shop_name, brand, name, size, concentration, gender, condition, sku, image_url, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """, (
                     shop_name,
@@ -218,10 +230,10 @@ def search_master_items(query, limit=100):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             like_pattern = f"%{query}%"
             cur.execute("""
-                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, image_url, created_at
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, image_url, updated_at
                 FROM master_table
                 WHERE brand ILIKE %s OR name ILIKE %s OR sku ILIKE %s
-                ORDER BY created_at DESC
+                ORDER BY updated_at DESC
                 LIMIT %s;
             """, (like_pattern, like_pattern, like_pattern, limit))
             results = cur.fetchall()
@@ -237,9 +249,9 @@ def get_master_items(limit=200):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, image_url, created_at
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, image_url, updated_at
                 FROM master_table
-                ORDER BY created_at DESC
+                ORDER BY updated_at DESC
                 LIMIT %s;
             """, (limit,))
             return cur.fetchall()

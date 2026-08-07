@@ -73,14 +73,24 @@ async function runSearch() {
   }
 }
 
+function formatDate(isoString) {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  if (isNaN(date)) return isoString;
+  return date.toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit"
+  });
+}
+
 function renderResults(results) {
   if (results.length === 0) {
     resultsEl.innerHTML = "<p>No matches found.</p>";
     return;
   }
 
-  const columns = ["shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url"];
-  const labels = { shop_name: "Shop", brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition", sku: "SKU", image_url: "Photo" };
+  const columns = ["shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "updated_at"];
+  const labels = { shop_name: "Shop", brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition", sku: "SKU", image_url: "Photo", updated_at: "Last Updated" };
 
   let html = "<table><thead><tr>";
   columns.forEach(c => html += `<th>${labels[c]}</th>`);
@@ -91,6 +101,8 @@ function renderResults(results) {
     columns.forEach(c => {
       if (c === "image_url") {
         html += item.image_url ? `<td><a href="${item.image_url}" target="_blank">View photo</a></td>` : "<td></td>";
+      } else if (c === "updated_at") {
+        html += `<td>${formatDate(item.updated_at)}</td>`;
       } else {
         html += `<td>${item[c] ?? ""}</td>`;
       }

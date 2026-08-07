@@ -305,7 +305,7 @@ def admin_data():
         html += "</tbody></table>"
         return html
 
-    master_html = render_table(master_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "created_at"])
+    master_html = render_table(master_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "updated_at"])
     items_html = render_table(items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "created_at"])
     corrections_html = render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"])
 
