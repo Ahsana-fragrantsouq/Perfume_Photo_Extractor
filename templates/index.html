@@ -49,8 +49,8 @@
 <div id="results"></div>
 
 <script>
-const FIELDS = ["brand", "name", "size", "concentration", "gender", "condition"];
-const FIELD_LABELS = { brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition" };
+const FIELDS = ["brand", "name", "size", "concentration", "gender", "condition", "estimated_price"];
+const FIELD_LABELS = { brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition", estimated_price: "Est. Price" };
 
 const form = document.getElementById("uploadForm");
 const statusEl = document.getElementById("status");
@@ -58,6 +58,7 @@ const resultsEl = document.getElementById("results");
 const submitBtn = document.getElementById("submitBtn");
 
 let currentShopName = "";
+let currentImageUrl = null;   // filled in from /extract's response, sent back to /record
 let originalItems = [];   // exactly what Claude returned, never mutated
 
 form.addEventListener("submit", async (e) => {
@@ -86,6 +87,7 @@ form.addEventListener("submit", async (e) => {
 
     statusEl.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}". Review and correct below, then select which to record.`;
     originalItems = data.items;
+    currentImageUrl = data.image_url ?? null;
 
     renderTable(data.items);
   } catch (err) {
@@ -167,7 +169,7 @@ async function saveSelectedItems() {
     const res = await fetch("/record", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ shop_name: currentShopName, items }),
+      body: JSON.stringify({ shop_name: currentShopName, image_url: currentImageUrl, items }),
     });
     const data = await res.json();
 

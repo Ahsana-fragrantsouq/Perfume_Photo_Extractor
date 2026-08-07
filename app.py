@@ -10,6 +10,8 @@ import anthropic
 import psycopg2
 
 import db
+import airtable_client
+import photo_storage
 
 app = Flask(__name__)
 
@@ -86,7 +88,6 @@ def compress_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
     img = img.convert("RGB")  # normalize (handles PNG transparency, HEIC-via-Pillow, etc.)
 
-    # Resize so the longest edge is at most MAX_DIMENSION
     if max(img.size) > MAX_DIMENSION:
         img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
 
@@ -95,12 +96,11 @@ def compress_image(image_bytes):
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality, optimize=True)
         data = buf.getvalue()
-        # base64 inflates size by ~33% — check against that, not the raw byte count
         if len(data) * 4 / 3 < MAX_BASE64_BYTES:
             return data, "image/jpeg"
         quality -= 15
 
-    return data, "image/jpeg"  # best effort at lowest quality tried
+    return data, "image/jpeg"
 
 
 def extract_json(text):
@@ -173,11 +173,26 @@ def extract():
 
         parsed = extract_json(raw_text)
         items = parsed.get("items", [])
+        print(f"[extract] Claude found {len(items)} item(s) for shop '{shop_name}'.")
+
+        # Save the RAW extraction to recorded_items right away — this happens
+        # BEFORE any user correction, so it's a log of exactly what the AI saw.
+        try:
+            db.save_recorded_items(shop_name, items)
+        except Exception as e:
+            # Don't fail the whole request just because logging the raw data failed —
+            # the user should still get their results to review.
+            print(f"[extract] Warning: could not save raw items to recorded_items: {e}")
+
+        # Upload the shelf photo so we have a permanent URL to attach to the final
+        # saved items later (in /record). Shared by every item from this same photo.
+        image_url = photo_storage.upload_image(compressed_bytes)
 
         return jsonify({
             "shop_name": shop_name,
             "item_count": len(items),
             "items": items,
+            "image_url": image_url,
         }), 200
 
     except json.JSONDecodeError:
@@ -195,15 +210,16 @@ def extract():
 
 @app.route("/record", methods=["POST"])
 def record():
-    """Receives the user's reviewed/corrected items.
+    """Receives the user's reviewed/corrected items and saves the FINAL version.
     Expects JSON body:
     {
       "shop_name": "...",
+      "image_url": "...",           // from /extract's response — same photo for all items here
       "items": [
         {
-          "original": {brand, name, size, ...},   // what Claude extracted
-          "corrected": {brand, name, size, ...},   // what the user confirmed/fixed
-          "selected": true                          // whether the user wants this one recorded
+          "original": {brand, name, size, ...},
+          "corrected": {brand, name, size, ...},
+          "selected": true
         },
         ...
       ]
@@ -214,6 +230,7 @@ def record():
         return jsonify({"error": "Expected JSON body."}), 400
 
     shop_name = (data.get("shop_name") or "").strip()
+    image_url = data.get("image_url")  # may be None if Cloudinary wasn't configured — that's fine
     items = data.get("items", [])
 
     if not shop_name:
@@ -222,12 +239,20 @@ def record():
         return jsonify({"error": "items must be a non-empty list."}), 400
 
     try:
-        # Log every field the user changed, regardless of whether the item was selected —
-        # even discarding an item doesn't mean its corrections aren't useful to learn from.
+        # Step 1: log every field the user changed, same as before — unrelated to selection
         corrections_logged = db.log_corrections(shop_name, items)
 
+        # Step 2: only the items the user actually checked get saved to master_table
         selected_items = [item["corrected"] for item in items if item.get("selected")]
-        saved_count = db.save_recorded_items(shop_name, selected_items) if selected_items else 0
+        print(f"[record] {len(selected_items)} of {len(items)} item(s) were selected to save.")
+
+        # Step 3: for each selected item, search Airtable French Inventories for a
+        # matching SKU (exact match on brand + name). Leaves SKU blank if no match.
+        for item in selected_items:
+            item["sku"] = airtable_client.find_sku(item.get("brand"), item.get("name"), item.get("size"))
+
+        # Step 4: save the final corrected items (with their SKU + shared photo URL)
+        saved_count = db.save_master_items(shop_name, selected_items, image_url) if selected_items else 0
 
         return jsonify({
             "shop_name": shop_name,
@@ -239,7 +264,6 @@ def record():
         return jsonify({"error": f"Database error: {str(e)}"}), 502
 
     except RuntimeError as e:
-        # Raised by db.get_conn() when DATABASE_URL isn't configured
         return jsonify({"error": str(e)}), 503
 
     except Exception as e:
@@ -248,9 +272,9 @@ def record():
 
 @app.route("/admin/data")
 def admin_data():
-    """Simple browser-viewable page to check what's been saved — no external tools needed.
-    Protected by a key so random visitors can't see your data: /admin/data?key=YOUR_KEY
-    Set ADMIN_KEY in Render's environment variables to whatever you want that key to be."""
+    """Simple browser-viewable page to check what's been saved.
+    Protected by a key: /admin/data?key=YOUR_KEY
+    Set ADMIN_KEY in Render's environment variables."""
     admin_key = os.environ.get("ADMIN_KEY")
     if not admin_key:
         return "ADMIN_KEY is not set in the environment. Add one in Render to use this page.", 503
@@ -258,6 +282,7 @@ def admin_data():
         return "Forbidden: missing or incorrect ?key=", 403
 
     try:
+        master_items = db.get_master_items(limit=200)
         items = db.get_recorded_items(limit=200)
         corrections = db.get_all_corrections(limit=200)
     except Exception as e:
@@ -268,11 +293,20 @@ def admin_data():
             return "<p>No rows yet.</p>"
         html = "<table><thead><tr>" + "".join(f"<th>{c}</th>" for c in columns) + "</tr></thead><tbody>"
         for row in rows:
-            html += "<tr>" + "".join(f"<td>{row.get(c, '') if row.get(c) is not None else ''}</td>" for c in columns) + "</tr>"
+            html += "<tr>"
+            for c in columns:
+                val = row.get(c)
+                # Make image_url clickable instead of showing a raw long link
+                if c == "image_url" and val:
+                    html += f'<td><a href="{val}" target="_blank">View photo</a></td>'
+                else:
+                    html += f"<td>{val if val is not None else ''}</td>"
+            html += "</tr>"
         html += "</tbody></table>"
         return html
 
-    items_html = render_table(items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition",  "created_at"])
+    master_html = render_table(master_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "created_at"])
+    items_html = render_table(items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "created_at"])
     corrections_html = render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"])
 
     return f"""
@@ -289,7 +323,9 @@ def admin_data():
     </head>
     <body>
       <h1>Saved Data</h1>
-      <h2>Recorded Items ({len(items)})</h2>
+      <h2>Master Table ({len(master_items)})</h2>
+      {master_html}
+      <h2>Recorded Items — raw, pre-correction ({len(items)})</h2>
       {items_html}
       <h2>Corrections Log ({len(corrections)})</h2>
       {corrections_html}
