@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Saved Data</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; margin: 30px; color: #222; }
+  h2 { margin-top: 40px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+  th { background: #f5f5f5; }
+  .checkbox-cell { width: 24px; text-align: center; }
+  .table-actions { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
+  button { background: #111; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  button:disabled { background: #999; cursor: not-allowed; }
+  .danger-zone { border: 2px solid #b00020; border-radius: 8px; padding: 16px; margin-top: 20px; background: #fff5f5; }
+  .danger-zone h2 { margin-top: 0; color: #b00020; }
+  .danger-zone input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 6px; width: 260px; margin-right: 10px; }
+  .danger-zone button { background: #b00020; }
+  .status-msg { margin-top: 10px; font-size: 13px; }
+  .status-ok { color: #1a7a1a; }
+  .status-error { color: #b00020; }
+</style>
+</head>
+<body>
+
+<h1>Saved Data</h1>
+
+<div class="danger-zone">
+  <h2>⚠ Full Reset</h2>
+  <p>Deletes EVERYTHING in all three tables (Master Table, Recorded Items, Corrections Log) and cannot be undone. Type <strong>DELETE ALL</strong> below to enable the button.</p>
+  <input type="text" id="confirmInput" placeholder="Type DELETE ALL">
+  <button id="clearAllBtn" disabled>Clear All Data</button>
+  <div id="clearAllStatus" class="status-msg"></div>
+</div>
+
+{% macro render_table(rows, columns, labels, table_name) %}
+  {% if rows %}
+  <table id="table-{{ table_name }}">
+    <thead>
+      <tr>
+        <th class="checkbox-cell"><input type="checkbox" class="select-all" data-table="{{ table_name }}"></th>
+        {% for c in columns %}<th>{{ labels.get(c, c) }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="checkbox-cell"><input type="checkbox" class="row-check" data-table="{{ table_name }}" data-id="{{ row.id }}"></td>
+        {% for c in columns %}
+          {% if c == 'image_url' %}
+            <td>{% if row[c] %}<a href="{{ row[c] }}" target="_blank">View photo</a>{% endif %}</td>
+          {% else %}
+            <td>{{ row[c] if row[c] is not none else '' }}</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="table-actions">
+    <button onclick="deleteSelected('{{ table_name }}')">Delete selected</button>
+    <div id="status-{{ table_name }}" class="status-msg"></div>
+  </div>
+  {% else %}
+  <p>No rows yet.</p>
+  {% endif %}
+{% endmacro %}
+
+<h2>Master Table ({{ master_items|length }})</h2>
+{{ render_table(master_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "updated_at"], {}, "master_table") }}
+
+<h2>Recorded Items — raw, pre-correction ({{ recorded_items|length }})</h2>
+{{ render_table(recorded_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "created_at"], {}, "recorded_items") }}
+
+<h2>Corrections Log ({{ corrections|length }})</h2>
+{{ render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"], {}, "corrections") }}
+
+<script>
+const ADMIN_KEY = {{ admin_key|tojson }};
+
+// Select-all checkbox toggles every row checkbox in that same table
+document.querySelectorAll(".select-all").forEach(selectAll => {
+  selectAll.addEventListener("change", () => {
+    const table = selectAll.dataset.table;
+    document.querySelectorAll(`.row-check[data-table="${table}"]`).forEach(cb => {
+      cb.checked = selectAll.checked;
+    });
+  });
+});
+
+async function deleteSelected(table) {
+  const checked = document.querySelectorAll(`.row-check[data-table="${table}"]:checked`);
+  const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id, 10));
+  const statusEl = document.getElementById(`status-${table}`);
+
+  if (ids.length === 0) {
+    statusEl.textContent = "No rows selected.";
+    statusEl.className = "status-msg status-error";
+    return;
+  }
+
+  if (!confirm(`Delete ${ids.length} row(s) from ${table}? This cannot be undone.`)) {
+    return;
+  }
+
+  statusEl.textContent = "Deleting...";
+  statusEl.className = "status-msg";
+
+  try {
+    const res = await fetch(`/admin/delete?key=${encodeURIComponent(ADMIN_KEY)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table, ids }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      statusEl.textContent = `Error: ${data.error || "Unknown error"}`;
+      statusEl.className = "status-msg status-error";
+      return;
+    }
+
+    statusEl.textContent = `Deleted ${data.deleted} row(s). Reloading...`;
+    statusEl.className = "status-msg status-ok";
+    setTimeout(() => location.reload(), 800);
+  } catch (err) {
+    statusEl.textContent = `Request failed: ${err.message}`;
+    statusEl.className = "status-msg status-error";
+  }
+}
+
+// Full reset — button only enables once the exact phrase is typed
+const confirmInput = document.getElementById("confirmInput");
+const clearAllBtn = document.getElementById("clearAllBtn");
+const clearAllStatus = document.getElementById("clearAllStatus");
+
+confirmInput.addEventListener("input", () => {
+  clearAllBtn.disabled = confirmInput.value !== "DELETE ALL";
+});
+
+clearAllBtn.addEventListener("click", async () => {
+  if (!confirm("This deletes ALL saved data permanently. Are you absolutely sure?")) {
+    return;
+  }
+
+  clearAllBtn.disabled = true;
+  clearAllStatus.textContent = "Clearing...";
+  clearAllStatus.className = "status-msg";
+
+  try {
+    const res = await fetch(`/admin/clear-all?key=${encodeURIComponent(ADMIN_KEY)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: confirmInput.value }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      clearAllStatus.textContent = `Error: ${data.error || "Unknown error"}`;
+      clearAllStatus.className = "status-msg status-error";
+      clearAllBtn.disabled = false;
+      return;
+    }
+
+    clearAllStatus.textContent = "All data cleared. Reloading...";
+    clearAllStatus.className = "status-msg status-ok";
+    setTimeout(() => location.reload(), 800);
+  } catch (err) {
+    clearAllStatus.textContent = `Request failed: ${err.message}`;
+    clearAllStatus.className = "status-msg status-error";
+    clearAllBtn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>

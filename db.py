@@ -94,6 +94,46 @@ def init_db():
         conn.close()
 
 
+ALLOWED_TABLES = {"master_table", "recorded_items", "corrections"}
+
+
+def delete_items(table, ids):
+    """Delete specific rows by id from one of the three known tables.
+    `table` is checked against an allowlist — never build this from raw user input
+    without that check, since table names can't be parameterized like values can."""
+    if table not in ALLOWED_TABLES:
+        raise ValueError(f"Invalid table name: {table!r}. Must be one of {ALLOWED_TABLES}.")
+    if not ids:
+        return 0
+
+    print(f"[db] Deleting {len(ids)} row(s) from {table}: ids={ids}")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # table name is validated against ALLOWED_TABLES above, so this is safe
+            cur.execute(f"DELETE FROM {table} WHERE id = ANY(%s);", (ids,))
+            deleted = cur.rowcount
+        conn.commit()
+        print(f"[db] Deleted {deleted} row(s) from {table}.")
+        return deleted
+    finally:
+        conn.close()
+
+
+def clear_all():
+    """Wipes every row from all three tables and resets id counters back to 1.
+    Irreversible — the app layer must confirm intent before calling this."""
+    print("[db] CLEARING ALL DATA from master_table, recorded_items, corrections...")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE master_table, recorded_items, corrections RESTART IDENTITY;")
+        conn.commit()
+        print("[db] All data cleared.")
+    finally:
+        conn.close()
+
+
 def get_recent_corrections(shop_name, limit=15):
     """Fetch the most recent corrections for a shop, used to build few-shot examples for the prompt."""
     conn = get_conn()
