@@ -68,7 +68,7 @@
 {% endmacro %}
 
 <h2>Master Table ({{ master_items|length }})</h2>
-{{ render_table(master_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "updated_at"], {}, "master_table") }}
+{{ render_table(master_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "product_name", "image_url", "updated_at"], {}, "master_table") }}
 
 <h2>Recorded Items — raw, pre-correction ({{ recorded_items|length }})</h2>
 {{ render_table(recorded_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "created_at"], {}, "recorded_items") }}

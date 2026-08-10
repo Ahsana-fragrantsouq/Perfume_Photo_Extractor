@@ -208,6 +208,23 @@ def extract():
         return jsonify({"error": str(e)}), 500
 
 
+def build_fallback_product_name(item):
+    """
+    Builds a name in the same style as Airtable's own auto-generated "Product Name"
+    field (e.g. "Anfasic Dokhoon Arqa Shay 75 ml EDP Unisex Perfume"), for items that
+    didn't match anything in French Inventories. Used so the column is never blank —
+    real Airtable text is always preferred when a match is found (see find_match()).
+    """
+    parts = [item.get("brand"), item.get("name"), item.get("size"), item.get("concentration"), item.get("gender")]
+    parts = [p.strip() for p in parts if p and str(p).strip()]
+
+    if not parts:
+        return None
+
+    suffix = "Tester" if (item.get("condition") or "").strip().lower() == "tester" else "Perfume"
+    return " ".join(parts + [suffix])
+
+
 @app.route("/record", methods=["POST"])
 def record():
     """Receives the user's reviewed/corrected items and saves the FINAL version.
@@ -247,9 +264,13 @@ def record():
         print(f"[record] {len(selected_items)} of {len(items)} item(s) were selected to save.")
 
         # Step 3: for each selected item, search Airtable French Inventories for a
-        # matching SKU (exact match on brand + name). Leaves SKU blank if no match.
+        # matching SKU + their own "Product Name" text (exact match on brand + name + size).
+        # If nothing matches, we build a similarly-formatted name ourselves so the
+        # column is never blank.
         for item in selected_items:
-            item["sku"] = airtable_client.find_sku(item.get("brand"), item.get("name"), item.get("size"), item.get("condition"))
+            match = airtable_client.find_match(item.get("brand"), item.get("name"), item.get("size"), item.get("condition"))
+            item["sku"] = match["sku"]
+            item["product_name"] = match["product_name"] or build_fallback_product_name(item)
 
         # Step 4: save the final corrected items (with their SKU + shared photo URL)
         saved_count = db.save_master_items(shop_name, selected_items, image_url) if selected_items else 0

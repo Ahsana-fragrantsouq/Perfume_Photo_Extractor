@@ -59,7 +59,8 @@ def init_db():
             """)
 
             # The final, corrected catalog — one row per item the user reviewed,
-            # fixed, and chose to save. Includes the matched Airtable SKU (if found)
+            # fixed, and chose to save. Includes the matched Airtable SKU (if found),
+            # a full display name (from Airtable when matched, or built ourselves),
             # and a clickable link back to the original shelf photo.
             # Uses "updated_at" (not "created_at") since this table may later support
             # editing existing rows — updated_at is the date that will actually matter then.
@@ -74,9 +75,15 @@ def init_db():
                     gender TEXT,
                     condition TEXT,
                     sku TEXT,
+                    product_name TEXT,
                     image_url TEXT,
                     updated_at TIMESTAMPTZ NOT NULL
                 );
+            """)
+
+            # Migration: add product_name to a table that was created before this column existed.
+            cur.execute("""
+                ALTER TABLE master_table ADD COLUMN IF NOT EXISTS product_name TEXT;
             """)
 
             # Migration: earlier deploys created this table with "created_at" instead.
@@ -219,8 +226,10 @@ def save_master_items(shop_name, items, image_url):
     Saves the FINAL, corrected items to master_table — called from /record, after the
     user has reviewed/fixed everything and selected which items to keep.
 
-    items: list of corrected item dicts, each already carrying a 'sku' key
-           (set by looking it up in Airtable — may be None if no match was found).
+    items: list of corrected item dicts, each already carrying 'sku' and 'product_name'
+           keys (set by looking up/building from Airtable — 'sku' may be None if no
+           match was found, but 'product_name' should always have a value, real or
+           fallback-built).
     image_url: the Cloudinary URL of the original shelf photo, shared by every item
                from this same extraction (may be None if photo upload wasn't configured).
     """
@@ -232,11 +241,13 @@ def save_master_items(shop_name, items, image_url):
         with conn.cursor() as cur:
             for item in items:
                 sku = item.get("sku")
-                print(f"[db]   -> {item.get('brand')} {item.get('name')} | SKU={sku!r} | image_url={image_url!r}")
+                product_name = item.get("product_name")
+                print(f"[db]   -> {item.get('brand')} {item.get('name')} | SKU={sku!r} | "
+                      f"product_name={product_name!r} | image_url={image_url!r}")
                 cur.execute("""
                     INSERT INTO master_table
-                        (shop_name, brand, name, size, concentration, gender, condition, sku, image_url, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        (shop_name, brand, name, size, concentration, gender, condition, sku, product_name, image_url, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """, (
                     shop_name,
                     item.get("brand"),
@@ -246,6 +257,7 @@ def save_master_items(shop_name, items, image_url):
                     item.get("gender"),
                     item.get("condition"),
                     sku,
+                    product_name,
                     image_url,
                     now,
                 ))
@@ -260,9 +272,9 @@ def save_master_items(shop_name, items, image_url):
 def search_master_items(query, limit=100):
     """
     Search master_table for items where the search text appears anywhere in
-    the Brand, Name, or SKU (partial match, case-insensitive) — e.g. "initio"
-    matches brand "Initio", "sauvage" matches name "Dior Sauvage", and "gra100"
-    matches SKU "GRA1003".
+    the Brand, Name, Product Name, or SKU (partial match, case-insensitive) —
+    e.g. "initio" matches brand "Initio", "sauvage" matches name "Dior Sauvage",
+    and "gra100" matches SKU "GRA1003".
     """
     print(f"[db] Searching master_table for: {query!r}")
     conn = get_conn()
@@ -270,12 +282,12 @@ def search_master_items(query, limit=100):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             like_pattern = f"%{query}%"
             cur.execute("""
-                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, image_url, updated_at
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, product_name, image_url, updated_at
                 FROM master_table
-                WHERE brand ILIKE %s OR name ILIKE %s OR sku ILIKE %s
+                WHERE brand ILIKE %s OR name ILIKE %s OR sku ILIKE %s OR product_name ILIKE %s
                 ORDER BY updated_at DESC
                 LIMIT %s;
-            """, (like_pattern, like_pattern, like_pattern, limit))
+            """, (like_pattern, like_pattern, like_pattern, like_pattern, limit))
             results = cur.fetchall()
             print(f"[db] Search found {len(results)} result(s).")
             return results
@@ -289,7 +301,7 @@ def get_master_items(limit=200):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, image_url, updated_at
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, product_name, image_url, updated_at
                 FROM master_table
                 ORDER BY updated_at DESC
                 LIMIT %s;

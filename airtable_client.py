@@ -17,6 +17,7 @@ FIELD_BRAND = "Brand"
 FIELD_NAME = "Perfume Name"
 FIELD_SIZE = "Size"
 FIELD_SKU = "SKU"
+FIELD_PRODUCT_NAME = "Product Name"  # Airtable's own auto-generated full display name
 
 
 def _escape_formula_value(value):
@@ -43,24 +44,31 @@ def _is_tester_record(record):
     return sku.strip().upper().endswith("T") or "tester" in obsolete_name.lower()
 
 
-def find_sku(brand, name, size, condition=None):
+def find_match(brand, name, size, condition=None):
     """
     Search French Inventories for a match on Brand + Perfume Name (case-insensitive,
     whitespace-trimmed), then compare Size ourselves with spacing/case ignored too —
     e.g. "100ml" matches "100 ml", and "tom ford " matches "Tom Ford".
-    Returns the SKU string if a match is found, otherwise None.
+
+    Returns a dict {"sku": ..., "product_name": ...} — either value may be None
+    if no match was found. `product_name` is Airtable's own auto-generated full
+    display name (e.g. "Anfasic Dokhoon Arqa Shay 75 ml EDP Unisex Perfume"),
+    pulled directly from their "Product Name" field rather than rebuilt ourselves,
+    so it matches their formatting exactly.
 
     Some products have TWO Airtable rows for the same brand/name/size — a regular
     one and a Tester (SKU ending in "T", e.g. TMF1035 vs TMF1035T). When that happens,
     `condition` (our own extracted "Sealed"/"Tester"/etc.) is used to pick the right one.
     """
+    no_match = {"sku": None, "product_name": None}
+
     if not AIRTABLE_API_KEY:
-        print("[airtable] AIRTABLE_API_KEY not set — skipping SKU lookup, leaving SKU blank.")
-        return None
+        print("[airtable] AIRTABLE_API_KEY not set — skipping lookup.")
+        return no_match
 
     if not brand or not name or not size:
         print(f"[airtable] Missing brand/name/size (brand={brand!r}, name={name!r}, size={size!r}) — skipping lookup.")
-        return None
+        return no_match
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{FRENCH_INVENTORIES_TABLE_ID}"
 
@@ -86,7 +94,7 @@ def find_sku(brand, name, size, condition=None):
 
         if not records:
             print(f"[airtable] No match found for brand={brand!r} name={name!r} — SKU will be blank.")
-            return None
+            return no_match
 
         target_size = _normalize_size(size)
         available_sizes = []
@@ -103,31 +111,29 @@ def find_sku(brand, name, size, condition=None):
         if not size_matches:
             print(f"[airtable] Brand/Name matched {len(records)} row(s), but none had size={size!r}. "
                   f"Sizes available in Airtable: {available_sizes} — SKU will be blank.")
-            return None
+            return no_match
 
-        if len(size_matches) == 1:
-            sku = size_matches[0]["fields"].get(FIELD_SKU)
-            print(f"[airtable] Match found — SKU={sku!r}")
-            return sku
+        chosen = size_matches[0]
+        if len(size_matches) > 1:
+            # Multiple rows matched brand+name+size — almost certainly a regular vs
+            # Tester duplicate. Use our extracted condition to pick the right one.
+            wants_tester = (condition or "").strip().lower() == "tester"
+            match_found = False
+            for record in size_matches:
+                if _is_tester_record(record) == wants_tester:
+                    chosen = record
+                    match_found = True
+                    break
+            if not match_found:
+                print(f"[airtable] {len(size_matches)} size-matching rows found, none clearly matched "
+                      f"condition={condition!r} — defaulting to first.")
 
-        # Multiple rows matched brand+name+size — almost certainly a regular vs
-        # Tester duplicate. Use our extracted condition to pick the right one.
-        wants_tester = (condition or "").strip().lower() == "tester"
-        for record in size_matches:
-            if _is_tester_record(record) == wants_tester:
-                sku = record["fields"].get(FIELD_SKU)
-                print(f"[airtable] {len(size_matches)} size-matching rows found — "
-                      f"picked SKU={sku!r} based on condition={condition!r} (wants_tester={wants_tester})")
-                return sku
-
-        # Condition didn't clearly point to one — fall back to the first match rather
-        # than returning nothing, but flag it so it's easy to notice in the logs.
-        sku = size_matches[0]["fields"].get(FIELD_SKU)
-        print(f"[airtable] {len(size_matches)} size-matching rows found, none clearly matched "
-              f"condition={condition!r} — defaulting to first: SKU={sku!r}")
-        return sku
+        sku = chosen["fields"].get(FIELD_SKU)
+        product_name = chosen["fields"].get(FIELD_PRODUCT_NAME)
+        print(f"[airtable] Match found — SKU={sku!r}, product_name={product_name!r}")
+        return {"sku": sku, "product_name": product_name}
 
     except requests.RequestException as e:
-        # Network/API errors shouldn't crash the whole save — just log and leave SKU blank
+        # Network/API errors shouldn't crash the whole save — just log and leave everything blank
         print(f"[airtable] Search failed: {e}")
-        return None
+        return no_match
