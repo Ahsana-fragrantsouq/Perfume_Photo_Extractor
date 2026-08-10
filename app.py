@@ -272,7 +272,7 @@ def record():
 
 @app.route("/admin/data")
 def admin_data():
-    """Simple browser-viewable page to check what's been saved.
+    """Browser-viewable page to check what's been saved, and delete rows if needed.
     Protected by a key: /admin/data?key=YOUR_KEY
     Set ADMIN_KEY in Render's environment variables."""
     admin_key = os.environ.get("ADMIN_KEY")
@@ -282,56 +282,65 @@ def admin_data():
         return "Forbidden: missing or incorrect ?key=", 403
 
     try:
-        master_items = db.get_master_items(limit=200)
-        items = db.get_recorded_items(limit=200)
-        corrections = db.get_all_corrections(limit=200)
+        master_items = db.get_master_items(limit=500)
+        recorded_items = db.get_recorded_items(limit=500)
+        corrections = db.get_all_corrections(limit=500)
     except Exception as e:
         return f"Database error: {str(e)}", 502
 
-    def render_table(rows, columns):
-        if not rows:
-            return "<p>No rows yet.</p>"
-        html = "<table><thead><tr>" + "".join(f"<th>{c}</th>" for c in columns) + "</tr></thead><tbody>"
-        for row in rows:
-            html += "<tr>"
-            for c in columns:
-                val = row.get(c)
-                # Make image_url clickable instead of showing a raw long link
-                if c == "image_url" and val:
-                    html += f'<td><a href="{val}" target="_blank">View photo</a></td>'
-                else:
-                    html += f"<td>{val if val is not None else ''}</td>"
-            html += "</tr>"
-        html += "</tbody></table>"
-        return html
+    return render_template(
+        "admin_data.html",
+        master_items=master_items,
+        recorded_items=recorded_items,
+        corrections=corrections,
+        admin_key=admin_key,
+    )
 
-    master_html = render_table(master_items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "updated_at"])
-    items_html = render_table(items, ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "created_at"])
-    corrections_html = render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"])
 
-    return f"""
-    <html>
-    <head>
-    <title>Saved Data</title>
-    <style>
-      body {{ font-family: -apple-system, Arial, sans-serif; margin: 30px; color: #222; }}
-      h2 {{ margin-top: 40px; }}
-      table {{ border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }}
-      th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
-      th {{ background: #f5f5f5; }}
-    </style>
-    </head>
-    <body>
-      <h1>Saved Data</h1>
-      <h2>Master Table ({len(master_items)})</h2>
-      {master_html}
-      <h2>Recorded Items — raw, pre-correction ({len(items)})</h2>
-      {items_html}
-      <h2>Corrections Log ({len(corrections)})</h2>
-      {corrections_html}
-    </body>
-    </html>
-    """
+@app.route("/admin/delete", methods=["POST"])
+def admin_delete():
+    """Deletes specific rows by id from one table. Called by the checkboxes on /admin/data.
+    POST /admin/delete?key=YOUR_KEY   body: {"table": "master_table", "ids": [1, 2, 3]}"""
+    admin_key = os.environ.get("ADMIN_KEY")
+    if not admin_key or request.args.get("key") != admin_key:
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
+    table = data.get("table")
+    raw_ids = data.get("ids", [])
+
+    try:
+        ids = [int(i) for i in raw_ids]
+    except (ValueError, TypeError):
+        return jsonify({"error": "ids must be a list of integers"}), 400
+
+    try:
+        deleted = db.delete_items(table, ids)
+        return jsonify({"deleted": deleted}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/admin/clear-all", methods=["POST"])
+def admin_clear_all():
+    """Wipes every table completely. Requires the exact confirmation phrase in the
+    request body as a safeguard against accidental calls.
+    POST /admin/clear-all?key=YOUR_KEY   body: {"confirm": "DELETE ALL"}"""
+    admin_key = os.environ.get("ADMIN_KEY")
+    if not admin_key or request.args.get("key") != admin_key:
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
+    if data.get("confirm") != "DELETE ALL":
+        return jsonify({"error": "Confirmation phrase did not match. Nothing was deleted."}), 400
+
+    try:
+        db.clear_all()
+        return jsonify({"status": "cleared"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route("/search")
