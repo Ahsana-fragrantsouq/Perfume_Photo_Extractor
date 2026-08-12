@@ -104,6 +104,11 @@ def init_db():
 ALLOWED_TABLES = {"master_table", "recorded_items", "corrections"}
 
 
+# TODO-REMOVE-BEFORE-LIVE: delete_items() + clear_all() below back the "Delete selected"
+# and "Clear All Data" buttons on /admin/data. These are dev/testing-only tools for
+# wiping bad test data while building this app. Remove both functions (and their
+# routes in app.py, and their buttons/JS in templates/admin_data.html) before this
+# app is used with real, permanent shop data.
 def delete_items(table, ids):
     """Delete specific rows by id from one of the three known tables.
     `table` is checked against an allowlist — never build this from raw user input
@@ -127,7 +132,40 @@ def delete_items(table, ids):
         conn.close()
 
 
+def update_skus(updates):
+    """Manually update the SKU on one or more master_table rows.
+    updates: list of {"id": int, "sku": str} dicts. Also bumps updated_at,
+    since a manual SKU fix is a real edit to the row."""
+    if not updates:
+        return 0
+
+    print(f"[db] Updating SKU on {len(updates)} master_table row(s)...")
+    conn = get_conn()
+    now = datetime.now(timezone.utc)
+    updated = 0
+    try:
+        with conn.cursor() as cur:
+            for u in updates:
+                row_id = int(u["id"])
+                sku = (u.get("sku") or "").strip() or None
+                cur.execute(
+                    "UPDATE master_table SET sku = %s, updated_at = %s WHERE id = %s;",
+                    (sku, now, row_id),
+                )
+                if cur.rowcount:
+                    updated += cur.rowcount
+                    print(f"[db]   -> row {row_id}: sku set to {sku!r}")
+        conn.commit()
+        print(f"[db] Updated {updated} row(s).")
+    finally:
+        conn.close()
+    return updated
+
+
 def clear_all():
+    # TODO-REMOVE-BEFORE-LIVE: backs the "Clear All Data" danger-zone button.
+    # Wipes every row in every table with no way to undo it. Remove this function
+    # (and its route in app.py, and the danger-zone UI in admin_data.html) before go-live.
     """Wipes every row from all three tables and resets id counters back to 1.
     Irreversible — the app layer must confirm intent before calling this."""
     print("[db] CLEARING ALL DATA from master_table, recorded_items, corrections...")

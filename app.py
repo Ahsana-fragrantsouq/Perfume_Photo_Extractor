@@ -318,8 +318,40 @@ def admin_data():
     )
 
 
+@app.route("/admin/update-sku", methods=["POST"])
+def admin_update_sku():
+    """Manually update SKUs on master_table rows — used by the editable SKU cells
+    on /admin/data. POST /admin/update-sku?key=YOUR_KEY
+    body: {"updates": [{"id": 26, "sku": "KLY1040"}, ...]}"""
+    admin_key = os.environ.get("ADMIN_KEY")
+    if not admin_key or request.args.get("key") != admin_key:
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
+    updates = data.get("updates", [])
+
+    if not isinstance(updates, list) or not updates:
+        return jsonify({"error": "updates must be a non-empty list"}), 400
+
+    try:
+        for u in updates:
+            int(u["id"])  # validate shape before touching the database
+    except (KeyError, ValueError, TypeError):
+        return jsonify({"error": "Each update needs an integer 'id'"}), 400
+
+    try:
+        updated = db.update_skus(updates)
+        return jsonify({"updated": updated}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
 @app.route("/admin/delete", methods=["POST"])
 def admin_delete():
+    # TODO-REMOVE-BEFORE-LIVE: this route + delete_items() in db.py + the "Delete
+    # selected" button/JS in templates/admin_data.html are dev/testing-only tools
+    # for cleaning up bad test data. Remove all three before this app goes live
+    # with real shop data.
     """Deletes specific rows by id from one table. Called by the checkboxes on /admin/data.
     POST /admin/delete?key=YOUR_KEY   body: {"table": "master_table", "ids": [1, 2, 3]}"""
     admin_key = os.environ.get("ADMIN_KEY")
@@ -346,6 +378,9 @@ def admin_delete():
 
 @app.route("/admin/clear-all", methods=["POST"])
 def admin_clear_all():
+    # TODO-REMOVE-BEFORE-LIVE: this route + clear_all() in db.py + the red
+    # "Full Reset" danger-zone section in templates/admin_data.html are
+    # dev/testing-only. Wipes ALL data with no undo. Remove all three before go-live.
     """Wipes every table completely. Requires the exact confirmation phrase in the
     request body as a safeguard against accidental calls.
     POST /admin/clear-all?key=YOUR_KEY   body: {"confirm": "DELETE ALL"}"""

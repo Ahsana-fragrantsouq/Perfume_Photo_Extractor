@@ -10,6 +10,10 @@
   th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
   th { background: #f5f5f5; }
   .checkbox-cell { width: 24px; text-align: center; }
+  .sku-input { border: 1px solid transparent; background: transparent; padding: 4px; font-size: 13px; width: 100%; box-sizing: border-box; border-radius: 4px; font-family: inherit; }
+  .sku-input:hover { border-color: #ccc; }
+  .sku-input:focus { border-color: #111; background: #fff; outline: none; }
+  .sku-input.edited { background: #fff8e1; }
   .table-actions { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
   button { background: #111; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   button:disabled { background: #999; cursor: not-allowed; }
@@ -26,6 +30,9 @@
 
 <h1>Saved Data</h1>
 
+<!-- TODO-REMOVE-BEFORE-LIVE: this entire danger-zone block (Full Reset), plus its
+     JS handler (clearAllBtn) below, plus /admin/clear-all + clear_all() in app.py/db.py.
+     Dev/testing-only — wipes ALL data, no undo. Remove before this app goes live. -->
 <div class="danger-zone">
   <h2>⚠ Full Reset</h2>
   <p>Deletes EVERYTHING in all three tables (Master Table, Recorded Items, Corrections Log) and cannot be undone. Type <strong>DELETE ALL</strong> below to enable the button.</p>
@@ -50,6 +57,8 @@
         {% for c in columns %}
           {% if c == 'image_url' %}
             <td>{% if row[c] %}<a href="{{ row[c] }}" target="_blank">View photo</a>{% endif %}</td>
+          {% elif c == 'sku' and table_name == 'master_table' %}
+            <td><input type="text" class="sku-input" data-id="{{ row.id }}" data-original="{{ row[c] if row[c] is not none else '' }}" value="{{ row[c] if row[c] is not none else '' }}"></td>
           {% else %}
             <td>{{ row[c] if row[c] is not none else '' }}</td>
           {% endif %}
@@ -59,7 +68,12 @@
     </tbody>
   </table>
   <div class="table-actions">
+    {# TODO-REMOVE-BEFORE-LIVE: this button + deleteSelected() JS below + /admin/delete
+       + delete_items() in app.py/db.py. Dev/testing-only row deletion. Remove before go-live. #}
     <button onclick="deleteSelected('{{ table_name }}')">Delete selected</button>
+    {% if table_name == 'master_table' %}
+    <button onclick="updateSkus()">Update SKUs</button>
+    {% endif %}
     <div id="status-{{ table_name }}" class="status-msg"></div>
   </div>
   {% else %}
@@ -79,6 +93,51 @@
 <script>
 const ADMIN_KEY = {{ admin_key|tojson }};
 
+// Highlight SKU cells that have been changed from their original value
+document.querySelectorAll(".sku-input").forEach(input => {
+  input.addEventListener("input", () => {
+    input.classList.toggle("edited", input.value !== input.dataset.original);
+  });
+});
+
+async function updateSkus() {
+  const statusEl = document.getElementById("status-master_table");
+  const changed = Array.from(document.querySelectorAll(".sku-input"))
+    .filter(input => input.value !== input.dataset.original)
+    .map(input => ({ id: parseInt(input.dataset.id, 10), sku: input.value.trim() }));
+
+  if (changed.length === 0) {
+    statusEl.textContent = "No SKU changes to save.";
+    statusEl.className = "status-msg status-error";
+    return;
+  }
+
+  statusEl.textContent = `Saving ${changed.length} SKU change(s)...`;
+  statusEl.className = "status-msg";
+
+  try {
+    const res = await fetch(`/admin/update-sku?key=${encodeURIComponent(ADMIN_KEY)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates: changed }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      statusEl.textContent = `Error: ${data.error || "Unknown error"}`;
+      statusEl.className = "status-msg status-error";
+      return;
+    }
+
+    statusEl.textContent = `Updated ${data.updated} row(s). Reloading...`;
+    statusEl.className = "status-msg status-ok";
+    setTimeout(() => location.reload(), 800);
+  } catch (err) {
+    statusEl.textContent = `Request failed: ${err.message}`;
+    statusEl.className = "status-msg status-error";
+  }
+}
+
 // Select-all checkbox toggles every row checkbox in that same table
 document.querySelectorAll(".select-all").forEach(selectAll => {
   selectAll.addEventListener("change", () => {
@@ -89,6 +148,8 @@ document.querySelectorAll(".select-all").forEach(selectAll => {
   });
 });
 
+// TODO-REMOVE-BEFORE-LIVE: pairs with the "Delete selected" buttons and /admin/delete.
+// Dev/testing-only. Remove this function + its buttons before go-live.
 async function deleteSelected(table) {
   const checked = document.querySelectorAll(`.row-check[data-table="${table}"]:checked`);
   const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id, 10));
@@ -130,6 +191,8 @@ async function deleteSelected(table) {
   }
 }
 
+// TODO-REMOVE-BEFORE-LIVE: this whole block, from here to the end of clearAllBtn's
+// handler below, pairs with the danger-zone HTML and /admin/clear-all. Remove before go-live.
 // Full reset — button only enables once the exact phrase is typed
 const confirmInput = document.getElementById("confirmInput");
 const clearAllBtn = document.getElementById("clearAllBtn");
