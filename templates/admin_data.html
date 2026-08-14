@@ -33,13 +33,6 @@
 <!-- TODO-REMOVE-BEFORE-LIVE: this entire danger-zone block (Full Reset), plus its
      JS handler (clearAllBtn) below, plus /admin/clear-all + clear_all() in app.py/db.py.
      Dev/testing-only — wipes ALL data, no undo. Remove before this app goes live. -->
-<div class="danger-zone">
-  <h2>⚠ Full Reset</h2>
-  <p>Deletes EVERYTHING in all three tables (Master Table, Recorded Items, Corrections Log) and cannot be undone. Type <strong>DELETE ALL</strong> below to enable the button.</p>
-  <input type="text" id="confirmInput" placeholder="Type DELETE ALL">
-  <button id="clearAllBtn" disabled>Clear All Data</button>
-  <div id="clearAllStatus" class="status-msg"></div>
-</div>
 
 {% macro render_table(rows, columns, labels, table_name) %}
   {% if rows %}
@@ -70,7 +63,7 @@
   <div class="table-actions">
     {# TODO-REMOVE-BEFORE-LIVE: this button + deleteSelected() JS below + /admin/delete
        + delete_items() in app.py/db.py. Dev/testing-only row deletion. Remove before go-live. #}
-    <button onclick="deleteSelected('{{ table_name }}')">Delete selected</button>
+    
     {% if table_name == 'master_table' %}
     <button onclick="updateSkus()">Update SKUs</button>
     {% endif %}
@@ -150,91 +143,12 @@ document.querySelectorAll(".select-all").forEach(selectAll => {
 
 // TODO-REMOVE-BEFORE-LIVE: pairs with the "Delete selected" buttons and /admin/delete.
 // Dev/testing-only. Remove this function + its buttons before go-live.
-async function deleteSelected(table) {
-  const checked = document.querySelectorAll(`.row-check[data-table="${table}"]:checked`);
-  const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id, 10));
-  const statusEl = document.getElementById(`status-${table}`);
 
-  if (ids.length === 0) {
-    statusEl.textContent = "No rows selected.";
-    statusEl.className = "status-msg status-error";
-    return;
-  }
-
-  if (!confirm(`Delete ${ids.length} row(s) from ${table}? This cannot be undone.`)) {
-    return;
-  }
-
-  statusEl.textContent = "Deleting...";
-  statusEl.className = "status-msg";
-
-  try {
-    const res = await fetch(`/admin/delete?key=${encodeURIComponent(ADMIN_KEY)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ table, ids }),
-    });
-    const data = await res.json();
-
-    if (!res.ok) {
-      statusEl.textContent = `Error: ${data.error || "Unknown error"}`;
-      statusEl.className = "status-msg status-error";
-      return;
-    }
-
-    statusEl.textContent = `Deleted ${data.deleted} row(s). Reloading...`;
-    statusEl.className = "status-msg status-ok";
-    setTimeout(() => location.reload(), 800);
-  } catch (err) {
-    statusEl.textContent = `Request failed: ${err.message}`;
-    statusEl.className = "status-msg status-error";
-  }
-}
 
 // TODO-REMOVE-BEFORE-LIVE: this whole block, from here to the end of clearAllBtn's
 // handler below, pairs with the danger-zone HTML and /admin/clear-all. Remove before go-live.
 // Full reset — button only enables once the exact phrase is typed
-const confirmInput = document.getElementById("confirmInput");
-const clearAllBtn = document.getElementById("clearAllBtn");
-const clearAllStatus = document.getElementById("clearAllStatus");
 
-confirmInput.addEventListener("input", () => {
-  clearAllBtn.disabled = confirmInput.value !== "DELETE ALL";
-});
-
-clearAllBtn.addEventListener("click", async () => {
-  if (!confirm("This deletes ALL saved data permanently. Are you absolutely sure?")) {
-    return;
-  }
-
-  clearAllBtn.disabled = true;
-  clearAllStatus.textContent = "Clearing...";
-  clearAllStatus.className = "status-msg";
-
-  try {
-    const res = await fetch(`/admin/clear-all?key=${encodeURIComponent(ADMIN_KEY)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: confirmInput.value }),
-    });
-    const data = await res.json();
-
-    if (!res.ok) {
-      clearAllStatus.textContent = `Error: ${data.error || "Unknown error"}`;
-      clearAllStatus.className = "status-msg status-error";
-      clearAllBtn.disabled = false;
-      return;
-    }
-
-    clearAllStatus.textContent = "All data cleared. Reloading...";
-    clearAllStatus.className = "status-msg status-ok";
-    setTimeout(() => location.reload(), 800);
-  } catch (err) {
-    clearAllStatus.textContent = `Request failed: ${err.message}`;
-    clearAllStatus.className = "status-msg status-error";
-    clearAllBtn.disabled = false;
-  }
-});
 </script>
 
 </body>
