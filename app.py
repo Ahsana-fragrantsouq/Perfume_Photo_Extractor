@@ -22,7 +22,7 @@ MODEL = "claude-sonnet-5"
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
-# Create tables on startup if they don't exist yet. If DATABASE_URL isn't set
+# Create tables on startup if they don't exist yet. If DB_HOST/DB_NAME/etc aren't set
 # (e.g. running locally without Postgres), the app still works for /extract —
 # only /record will fail until a database is connected.
 try:

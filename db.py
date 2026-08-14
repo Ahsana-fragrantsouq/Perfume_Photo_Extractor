@@ -7,16 +7,38 @@ import psycopg2.extras
 
 FIELDS = ["brand", "name", "size", "concentration", "gender", "condition"]
 
+# Individual connection settings for cPanel-hosted Postgres. Set these in Render's
+# environment variables:
+#   DB_HOST      — your cPanel server's IP address (or hostname)
+#   DB_PORT      — usually 5432, confirm in cPanel > PostgreSQL Databases
+#   DB_NAME      — the database name you created (often prefixed, e.g. cpaneluser_perfumedb)
+#   DB_USER      — the database user (often prefixed too, e.g. cpaneluser_dbuser)
+#   DB_PASSWORD  — that user's password
+#   DB_SSLMODE   — optional override; defaults to "prefer" (tries SSL, falls back if
+#                  the server doesn't support it) so this works whether or not your
+#                  host requires SSL, without needing to know in advance.
+REQUIRED_DB_VARS = ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"]
+
 
 def get_conn():
-    """Get a Postgres connection using Render's DATABASE_URL env var.
-    Render sometimes provides 'postgres://' which psycopg2 needs as 'postgresql://'."""
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        raise RuntimeError("DATABASE_URL is not set. Add a Postgres database in Render and link it to this service.")
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
-    return psycopg2.connect(db_url)
+    """Get a Postgres connection using individual host/port/dbname/user/password
+    env vars (for cPanel-hosted Postgres), rather than a single DATABASE_URL."""
+    missing = [v for v in REQUIRED_DB_VARS if not os.environ.get(v)]
+    if missing:
+        raise RuntimeError(
+            f"Missing database env var(s): {', '.join(missing)}. "
+            f"Set DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD in Render's environment variables."
+        )
+
+    return psycopg2.connect(
+        host=os.environ["DB_HOST"],
+        port=os.environ["DB_PORT"],
+        dbname=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+        sslmode=os.environ.get("DB_SSLMODE", "prefer"),
+        connect_timeout=10,
+    )
 
 
 def init_db():
