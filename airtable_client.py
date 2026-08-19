@@ -16,12 +16,12 @@ AIRTABLE_API_KEY = os.environ.get("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.environ.get("AIRTABLE_BASE_ID", "app5gOqDt9aZrW5bV")
 FRENCH_INVENTORIES_TABLE_ID = os.environ.get("AIRTABLE_FRENCH_INVENTORIES_TABLE_ID", "tblL03CEHdYy1kUdQ")
 
-# Exact field names as they appear in the Airtable table. Also overridable via env
-# vars, since different bases (e.g. a test base vs. the real French Inventories)
-# can use different capitalization for the same fields — e.g. "brand" vs "Brand".
-FIELD_BRAND = os.environ.get("AIRTABLE_FIELD_BRAND", "Brand")
+# Exact field names as they appear in the Airtable table. Overridable via env vars
+# if you switch to a table with different capitalization, but these defaults match
+# your current table (test base uses lowercase "brand"/"size").
+FIELD_BRAND = os.environ.get("AIRTABLE_FIELD_BRAND", "brand")
 FIELD_NAME = os.environ.get("AIRTABLE_FIELD_NAME", "Perfume Name")
-FIELD_SIZE = os.environ.get("AIRTABLE_FIELD_SIZE", "Size")
+FIELD_SIZE = os.environ.get("AIRTABLE_FIELD_SIZE", "size")
 FIELD_SKU = os.environ.get("AIRTABLE_FIELD_SKU", "SKU")
 FIELD_PRODUCT_NAME = os.environ.get("AIRTABLE_FIELD_PRODUCT_NAME", "Product Name")  # Airtable's own auto-generated full display name
 FIELD_CONCENTRATION = os.environ.get("AIRTABLE_FIELD_CONCENTRATION", "Type")  # e.g. EDP, EDT, Parfum — single-select field
