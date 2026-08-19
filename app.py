@@ -1,429 +1,406 @@
 import os
-import base64
 import json
-import re
-import io
+from datetime import datetime, timezone
 
-from flask import Flask, request, jsonify, render_template
-from PIL import Image
-import anthropic
 import psycopg2
-
-import db
-import airtable_client
-import photo_storage
-
-app = Flask(__name__)
-
-# Anthropic client — reads ANTHROPIC_API_KEY from environment (set this in Render)
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-MODEL = "claude-sonnet-5"
-
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
-
-# Create tables on startup if they don't exist yet. If DB_HOST/DB_NAME/etc aren't set
-# (e.g. running locally without Postgres), the app still works for /extract —
-# only /record will fail until a database is connected.
-try:
-    db.init_db()
-except Exception as e:
-    print(f"[startup] Skipping DB init: {e}")
-
-EXTRACTION_PROMPT_BASE = """You are looking at a photo of perfumes/fragrances taken inside a shop.
-
-Identify every distinct perfume/fragrance bottle or box you can see in the image.
-For each item, extract as much of the following as you can confidently determine from the image:
-
-- brand (e.g. "Dior", "Chanel")
-- name (e.g. "Sauvage", "Bleu de Chanel")
-- size (e.g. "100ml", "50ml") — include unit
-- concentration (e.g. "EDP", "EDT", "Parfum", "Cologne") — null if not visible/unclear
-- gender ("Men", "Women", "Unisex") — null if unclear
-- condition ("Sealed", "Tester", "Used", "Unknown") — best guess from packaging/visual cues
-- confidence — your confidence in this item's identification: "high", "medium", or "low"
-
-Respond with ONLY valid JSON, no markdown code fences, no explanation text, in this exact structure:
-
-{
-  "items": [
-    {
-      "brand": "...",
-      "name": "...",
-      "size": "...",
-      "concentration": "...",
-      "gender": "...",
-      "condition": "...",
-      "confidence": "..."
-    }
-  ]
-}
-
-If you cannot identify any items at all, return {"items": []}.
-Do not guess wildly — if a field is not determinable from the image, use null for that field rather than inventing a value.
-"""
-
-
-def build_extraction_prompt(shop_name):
-    """Base prompt + any past corrections for this shop, so Claude improves over time per-shop."""
-    try:
-        examples_text = db.build_correction_examples_text(shop_name)
-    except Exception as e:
-        print(f"[extract] Could not load past corrections: {e}")
-        examples_text = ""
-    return EXTRACTION_PROMPT_BASE + examples_text
-
-
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-MAX_DIMENSION = 1568  # Claude's recommended max edge length; larger images just get downsampled anyway
-MAX_BASE64_BYTES = 10 * 1024 * 1024  # Anthropic's hard limit for base64-encoded images
-
-
-def compress_image(image_bytes):
-    """Resize and compress an image so its base64 size stays under Claude's 10MB limit.
-    Returns (jpeg_bytes, media_type)."""
-    img = Image.open(io.BytesIO(image_bytes))
-    img = img.convert("RGB")  # normalize (handles PNG transparency, HEIC-via-Pillow, etc.)
-
-    if max(img.size) > MAX_DIMENSION:
-        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
-
-    quality = 85
-    while quality >= 40:
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=True)
-        data = buf.getvalue()
-        if len(data) * 4 / 3 < MAX_BASE64_BYTES:
-            return data, "image/jpeg"
-        quality -= 15
-
-    return data, "image/jpeg"
-
-
-def extract_json(text):
-    """Claude sometimes wraps JSON in code fences despite instructions — strip them defensively."""
-    text = text.strip()
-    text = re.sub(r"^```(json)?", "", text).strip()
-    text = re.sub(r"```$", "", text).strip()
-    return json.loads(text)
-
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-@app.route("/extract", methods=["POST"])
-def extract():
-    if "photo" not in request.files:
-        return jsonify({"error": "No photo file provided. Use form field name 'photo'."}), 400
-
-    photo = request.files["photo"]
-    shop_name = request.form.get("shop_name", "").strip()
-
-    if photo.filename == "":
-        return jsonify({"error": "No photo selected."}), 400
-
-    if not shop_name:
-        return jsonify({"error": "shop_name is required."}), 400
-
-    if not allowed_file(photo.filename):
-        return jsonify({"error": f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
-
-    try:
-        image_bytes = photo.read()
-        compressed_bytes, media_type = compress_image(image_bytes)
-        image_b64 = base64.standard_b64encode(compressed_bytes).decode("utf-8")
-
-        message = client.messages.create(
-            model=MODEL,
-            max_tokens=8000,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": image_b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": build_extraction_prompt(shop_name),
-                        },
-                    ],
-                }
-            ],
-        )
-
-        raw_text = message.content[0].text
-
-        if message.stop_reason == "max_tokens":
-            return jsonify({
-                "error": "Response was cut off because too many items were detected in one photo. "
-                         "Try taking a closer photo covering fewer items at once.",
-                "raw_response": raw_text,
-            }), 502
-
-        parsed = extract_json(raw_text)
-        items = parsed.get("items", [])
-        print(f"[extract] Claude found {len(items)} item(s) for shop '{shop_name}'.")
-
-        # Save the RAW extraction to recorded_items right away — this happens
-        # BEFORE any user correction, so it's a log of exactly what the AI saw.
-        try:
-            db.save_recorded_items(shop_name, items)
-        except Exception as e:
-            # Don't fail the whole request just because logging the raw data failed —
-            # the user should still get their results to review.
-            print(f"[extract] Warning: could not save raw items to recorded_items: {e}")
-
-        # Upload the shelf photo so we have a permanent URL to attach to the final
-        # saved items later (in /record). Shared by every item from this same photo.
-        image_url = photo_storage.upload_image(compressed_bytes)
-
-        return jsonify({
-            "shop_name": shop_name,
-            "item_count": len(items),
-            "items": items,
-            "image_url": image_url,
-        }), 200
-
-    except json.JSONDecodeError:
-        return jsonify({
-            "error": "Model did not return valid JSON.",
-            "raw_response": raw_text if "raw_text" in locals() else None,
-        }), 502
-
-    except anthropic.APIError as e:
-        return jsonify({"error": f"Anthropic API error: {str(e)}"}), 502
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-def build_fallback_product_name(item):
-    """
-    Builds a name in the same style as Airtable's own auto-generated "Product Name"
-    field (e.g. "Anfasic Dokhoon Arqa Shay 75 ml EDP Unisex Perfume"), for items that
-    didn't match anything in French Inventories. Used so the column is never blank —
-    real Airtable text is always preferred when a match is found (see find_match()).
-    """
-    parts = [item.get("brand"), item.get("name"), item.get("size"), item.get("concentration"), item.get("gender")]
-    parts = [p.strip() for p in parts if p and str(p).strip()]
-
-    if not parts:
-        return None
-
-    suffix = "Tester" if (item.get("condition") or "").strip().lower() == "tester" else "Perfume"
-    return " ".join(parts + [suffix])
-
-
-@app.route("/record", methods=["POST"])
-def record():
-    """Receives the user's reviewed/corrected items and saves the FINAL version.
-    Expects JSON body:
-    {
-      "shop_name": "...",
-      "image_url": "...",           // from /extract's response — same photo for all items here
-      "items": [
-        {
-          "original": {brand, name, size, ...},
-          "corrected": {brand, name, size, ...},
-          "selected": true
-        },
-        ...
-      ]
-    }
-    """
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "Expected JSON body."}), 400
-
-    shop_name = (data.get("shop_name") or "").strip()
-    image_url = data.get("image_url")  # may be None if Cloudinary wasn't configured — that's fine
-    items = data.get("items", [])
-
-    if not shop_name:
-        return jsonify({"error": "shop_name is required."}), 400
-    if not isinstance(items, list) or len(items) == 0:
-        return jsonify({"error": "items must be a non-empty list."}), 400
-
-    try:
-        # Step 1: log every field the user changed, same as before — unrelated to selection
-        corrections_logged = db.log_corrections(shop_name, items)
-
-        # Step 2: only the items the user actually checked get saved to master_table
-        selected_items = [item["corrected"] for item in items if item.get("selected")]
-        print(f"[record] {len(selected_items)} of {len(items)} item(s) were selected to save.")
-
-        # Step 3: for each selected item, search Airtable French Inventories for a
-        # matching SKU + their own "Product Name" text (exact match on brand + name + size).
-        # If nothing matches, we build a similarly-formatted name ourselves so the
-        # column is never blank.
-        for item in selected_items:
-            match = airtable_client.find_match(item.get("brand"), item.get("name"), item.get("size"), item.get("condition"))
-            item["sku"] = match["sku"]
-            item["product_name"] = match["product_name"] or build_fallback_product_name(item)
-
-        # Step 4: save the final corrected items (with their SKU + shared photo URL)
-        saved_count = db.save_master_items(shop_name, selected_items, image_url) if selected_items else 0
-
-        return jsonify({
-            "shop_name": shop_name,
-            "items_saved": saved_count,
-            "corrections_logged": corrections_logged,
-        }), 200
-
-    except psycopg2.Error as e:
-        return jsonify({"error": f"Database error: {str(e)}"}), 502
-
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 503
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/admin/data")
-def admin_data():
-    """Browser-viewable page to check what's been saved, and delete rows if needed.
-    Protected by a key: /admin/data?key=YOUR_KEY
-    Set ADMIN_KEY in Render's environment variables."""
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key:
-        return "ADMIN_KEY is not set in the environment. Add one in Render to use this page.", 503
-    if request.args.get("key") != admin_key:
-        return "Forbidden: missing or incorrect ?key=", 403
-
-    try:
-        master_items = db.get_master_items(limit=500)
-        recorded_items = db.get_recorded_items(limit=500)
-        corrections = db.get_all_corrections(limit=500)
-    except Exception as e:
-        return f"Database error: {str(e)}", 502
-
-    return render_template(
-        "admin_data.html",
-        master_items=master_items,
-        recorded_items=recorded_items,
-        corrections=corrections,
-        admin_key=admin_key,
+import psycopg2.extras
+
+FIELDS = ["brand", "name", "size", "concentration", "gender", "condition"]
+
+def get_conn():
+    """Get a Postgres connection using Render's DATABASE_URL env var.
+    Render sometimes provides 'postgres://' which psycopg2 needs as 'postgresql://'."""
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is not set. Add a Postgres database in Render and link it to this service.")
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    return psycopg2.connect(
+        db_url,
+        # Kept short on purpose: this connection sits on the critical path of every
+        # /extract call (build_extraction_prompt looks up past corrections before
+        # calling Claude). A long timeout here, combined with Claude's own response
+        # time, can exceed gunicorn's worker timeout and crash the whole request.
+        # Failing fast means the person still gets their extraction results even if
+        # the database is temporarily unreachable.
+        connect_timeout=3,
     )
 
 
-@app.route("/admin/update-sku", methods=["POST"])
-def admin_update_sku():
-    """Manually update SKUs on master_table rows — used by the editable SKU cells
-    on /admin/data. POST /admin/update-sku?key=YOUR_KEY
-    body: {"updates": [{"id": 26, "sku": "KLY1040"}, ...]}"""
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key or request.args.get("key") != admin_key:
-        return jsonify({"error": "Forbidden"}), 403
-
-    data = request.get_json(silent=True) or {}
-    updates = data.get("updates", [])
-
-    if not isinstance(updates, list) or not updates:
-        return jsonify({"error": "updates must be a non-empty list"}), 400
-
+def init_db():
+    """Create tables if they don't exist yet. Safe to call on every app startup."""
+    print("[db] Checking/creating database tables...")
+    conn = get_conn()
     try:
-        for u in updates:
-            int(u["id"])  # validate shape before touching the database
-    except (KeyError, ValueError, TypeError):
-        return jsonify({"error": "Each update needs an integer 'id'"}), 400
+        with conn.cursor() as cur:
+            # Raw log of every correction a user makes (one row per field changed)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS corrections (
+                    id SERIAL PRIMARY KEY,
+                    shop_name TEXT NOT NULL,
+                    field_name TEXT NOT NULL,
+                    original_value TEXT,
+                    corrected_value TEXT,
+                    item_context TEXT,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_corrections_shop_name
+                ON corrections (shop_name);
+            """)
 
+            # Raw dump of exactly what Claude extracted, saved immediately at /extract time,
+            # BEFORE any user correction. This is the "as the AI saw it" record.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS recorded_items (
+                    id SERIAL PRIMARY KEY,
+                    shop_name TEXT NOT NULL,
+                    brand TEXT,
+                    name TEXT,
+                    size TEXT,
+                    concentration TEXT,
+                    gender TEXT,
+                    condition TEXT,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+            """)
+
+            # The final, corrected catalog — one row per item the user reviewed,
+            # fixed, and chose to save. Includes the matched Airtable SKU (if found),
+            # a full display name (from Airtable when matched, or built ourselves),
+            # and a clickable link back to the original shelf photo.
+            # Uses "updated_at" (not "created_at") since this table may later support
+            # editing existing rows — updated_at is the date that will actually matter then.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS master_table (
+                    id SERIAL PRIMARY KEY,
+                    shop_name TEXT NOT NULL,
+                    brand TEXT,
+                    name TEXT,
+                    size TEXT,
+                    concentration TEXT,
+                    gender TEXT,
+                    condition TEXT,
+                    sku TEXT,
+                    product_name TEXT,
+                    image_url TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL
+                );
+            """)
+
+            # Migration: add product_name to a table that was created before this column existed.
+            cur.execute("""
+                ALTER TABLE master_table ADD COLUMN IF NOT EXISTS product_name TEXT;
+            """)
+
+            # Migration: earlier deploys created this table with "created_at" instead.
+            # Rename it in place so existing data (and its dates) aren't lost.
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'master_table' AND column_name = 'created_at';
+            """)
+            if cur.fetchone():
+                print("[db] Migrating master_table: renaming created_at -> updated_at")
+                cur.execute("ALTER TABLE master_table RENAME COLUMN created_at TO updated_at;")
+        conn.commit()
+        print("[db] Tables ready.")
+    finally:
+        conn.close()
+
+
+ALLOWED_TABLES = {"master_table", "recorded_items", "corrections"}
+
+
+# TODO-REMOVE-BEFORE-LIVE: delete_items() + clear_all() below back the "Delete selected"
+# and "Clear All Data" buttons on /admin/data. These are dev/testing-only tools for
+# wiping bad test data while building this app. Remove both functions (and their
+# routes in app.py, and their buttons/JS in templates/admin_data.html) before this
+# app is used with real, permanent shop data.
+def delete_items(table, ids):
+    """Delete specific rows by id from one of the three known tables.
+    `table` is checked against an allowlist — never build this from raw user input
+    without that check, since table names can't be parameterized like values can."""
+    if table not in ALLOWED_TABLES:
+        raise ValueError(f"Invalid table name: {table!r}. Must be one of {ALLOWED_TABLES}.")
+    if not ids:
+        return 0
+
+    print(f"[db] Deleting {len(ids)} row(s) from {table}: ids={ids}")
+    conn = get_conn()
     try:
-        updated = db.update_skus(updates)
-        return jsonify({"updated": updated}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        with conn.cursor() as cur:
+            # table name is validated against ALLOWED_TABLES above, so this is safe
+            cur.execute(f"DELETE FROM {table} WHERE id = ANY(%s);", (ids,))
+            deleted = cur.rowcount
+        conn.commit()
+        print(f"[db] Deleted {deleted} row(s) from {table}.")
+        return deleted
+    finally:
+        conn.close()
 
 
-@app.route("/admin/delete", methods=["POST"])
-def admin_delete():
-    # TODO-REMOVE-BEFORE-LIVE: this route + delete_items() in db.py + the "Delete
-    # selected" button/JS in templates/admin_data.html are dev/testing-only tools
-    # for cleaning up bad test data. Remove all three before this app goes live
-    # with real shop data.
-    """Deletes specific rows by id from one table. Called by the checkboxes on /admin/data.
-    POST /admin/delete?key=YOUR_KEY   body: {"table": "master_table", "ids": [1, 2, 3]}"""
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key or request.args.get("key") != admin_key:
-        return jsonify({"error": "Forbidden"}), 403
+def update_skus(updates):
+    """Manually update the SKU on one or more master_table rows.
+    updates: list of {"id": int, "sku": str} dicts. Also bumps updated_at,
+    since a manual SKU fix is a real edit to the row."""
+    if not updates:
+        return 0
 
-    data = request.get_json(silent=True) or {}
-    table = data.get("table")
-    raw_ids = data.get("ids", [])
-
+    print(f"[db] Updating SKU on {len(updates)} master_table row(s)...")
+    conn = get_conn()
+    now = datetime.now(timezone.utc)
+    updated = 0
     try:
-        ids = [int(i) for i in raw_ids]
-    except (ValueError, TypeError):
-        return jsonify({"error": "ids must be a list of integers"}), 400
+        with conn.cursor() as cur:
+            for u in updates:
+                row_id = int(u["id"])
+                sku = (u.get("sku") or "").strip() or None
+                cur.execute(
+                    "UPDATE master_table SET sku = %s, updated_at = %s WHERE id = %s;",
+                    (sku, now, row_id),
+                )
+                if cur.rowcount:
+                    updated += cur.rowcount
+                    print(f"[db]   -> row {row_id}: sku set to {sku!r}")
+        conn.commit()
+        print(f"[db] Updated {updated} row(s).")
+    finally:
+        conn.close()
+    return updated
 
+
+def clear_all():
+    # TODO-REMOVE-BEFORE-LIVE: backs the "Clear All Data" danger-zone button.
+    # Wipes every row in every table with no way to undo it. Remove this function
+    # (and its route in app.py, and the danger-zone UI in admin_data.html) before go-live.
+    """Wipes every row from all three tables and resets id counters back to 1.
+    Irreversible — the app layer must confirm intent before calling this."""
+    print("[db] CLEARING ALL DATA from master_table, recorded_items, corrections...")
+    conn = get_conn()
     try:
-        deleted = db.delete_items(table, ids)
-        return jsonify({"deleted": deleted}), 200
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE master_table, recorded_items, corrections RESTART IDENTITY;")
+        conn.commit()
+        print("[db] All data cleared.")
+    finally:
+        conn.close()
 
 
-@app.route("/admin/clear-all", methods=["POST"])
-def admin_clear_all():
-    # TODO-REMOVE-BEFORE-LIVE: this route + clear_all() in db.py + the red
-    # "Full Reset" danger-zone section in templates/admin_data.html are
-    # dev/testing-only. Wipes ALL data with no undo. Remove all three before go-live.
-    """Wipes every table completely. Requires the exact confirmation phrase in the
-    request body as a safeguard against accidental calls.
-    POST /admin/clear-all?key=YOUR_KEY   body: {"confirm": "DELETE ALL"}"""
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key or request.args.get("key") != admin_key:
-        return jsonify({"error": "Forbidden"}), 403
-
-    data = request.get_json(silent=True) or {}
-    if data.get("confirm") != "DELETE ALL":
-        return jsonify({"error": "Confirmation phrase did not match. Nothing was deleted."}), 400
-
+def get_recent_corrections(shop_name, limit=15):
+    """Fetch the most recent corrections for a shop, used to build few-shot examples for the prompt."""
+    conn = get_conn()
     try:
-        db.clear_all()
-        return jsonify({"status": "cleared"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT field_name, original_value, corrected_value, item_context
+                FROM corrections
+                WHERE shop_name = %s AND original_value IS DISTINCT FROM corrected_value
+                ORDER BY created_at DESC
+                LIMIT %s;
+            """, (shop_name, limit))
+            return cur.fetchall()
+    finally:
+        conn.close()
 
 
-@app.route("/search")
-def search_page():
-    """Simple search page — a text box for name/SKU, results load via /api/search."""
-    return render_template("search.html")
-
-
-@app.route("/api/search")
-def api_search():
-    """JSON API used by the search page (and callable by other tools later).
-    GET /api/search?q=sauvage"""
-    query = (request.args.get("q") or "").strip()
-    if not query:
-        return jsonify({"error": "Missing search query. Use ?q=..."}), 400
-
+def log_corrections(shop_name, items):
+    """items: list of {original: {...}, corrected: {...}}.
+    Logs one row per field that actually changed between what Claude extracted and what the user fixed."""
+    conn = get_conn()
+    now = datetime.now(timezone.utc)
+    rows_written = 0
     try:
-        results = db.search_master_items(query)
-        return jsonify({"query": query, "count": len(results), "results": results}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        with conn.cursor() as cur:
+            for item in items:
+                original = item.get("original", {}) or {}
+                corrected = item.get("corrected", {}) or {}
+                item_context = f"{corrected.get('brand') or original.get('brand') or ''} {corrected.get('name') or original.get('name') or ''}".strip()
+
+                for field in FIELDS:
+                    orig_val = original.get(field)
+                    corr_val = corrected.get(field)
+                    if orig_val != corr_val:
+                        print(f"[db] Correction logged for '{item_context}': {field} changed '{orig_val}' -> '{corr_val}'")
+                        cur.execute("""
+                            INSERT INTO corrections
+                                (shop_name, field_name, original_value, corrected_value, item_context, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s);
+                        """, (shop_name, field, orig_val, corr_val, item_context, now))
+                        rows_written += 1
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"[db] Total corrections logged: {rows_written}")
+    return rows_written
 
 
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok"}), 200
+def save_recorded_items(shop_name, items):
+    """Saves the RAW items exactly as Claude extracted them — called from /extract,
+    BEFORE the user has corrected anything. items: list of item dicts from Claude."""
+    print(f"[db] Saving {len(items)} raw extracted item(s) to recorded_items for shop '{shop_name}'...")
+    conn = get_conn()
+    now = datetime.now(timezone.utc)
+    saved = 0
+    try:
+        with conn.cursor() as cur:
+            for item in items:
+                cur.execute("""
+                    INSERT INTO recorded_items
+                        (shop_name, brand, name, size, concentration, gender, condition, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """, (
+                    shop_name,
+                    item.get("brand"),
+                    item.get("name"),
+                    item.get("size"),
+                    item.get("concentration"),
+                    item.get("gender"),
+                    item.get("condition"),
+                    now,
+                ))
+                saved += 1
+        conn.commit()
+        print(f"[db] Saved {saved} raw item(s) to recorded_items.")
+    finally:
+        conn.close()
+    return saved
 
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+def save_master_items(shop_name, items, image_url):
+    """
+    Saves the FINAL, corrected items to master_table — called from /record, after the
+    user has reviewed/fixed everything and selected which items to keep.
+
+    items: list of corrected item dicts, each already carrying 'sku' and 'product_name'
+           keys (set by looking up/building from Airtable — 'sku' may be None if no
+           match was found, but 'product_name' should always have a value, real or
+           fallback-built).
+    image_url: the Cloudinary URL of the original shelf photo, shared by every item
+               from this same extraction (may be None if photo upload wasn't configured).
+    """
+    print(f"[db] Saving {len(items)} item(s) to master_table for shop '{shop_name}'...")
+    conn = get_conn()
+    now = datetime.now(timezone.utc)
+    saved = 0
+    try:
+        with conn.cursor() as cur:
+            for item in items:
+                sku = item.get("sku")
+                product_name = item.get("product_name")
+                print(f"[db]   -> {item.get('brand')} {item.get('name')} | SKU={sku!r} | "
+                      f"product_name={product_name!r} | image_url={image_url!r}")
+                cur.execute("""
+                    INSERT INTO master_table
+                        (shop_name, brand, name, size, concentration, gender, condition, sku, product_name, image_url, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                """, (
+                    shop_name,
+                    item.get("brand"),
+                    item.get("name"),
+                    item.get("size"),
+                    item.get("concentration"),
+                    item.get("gender"),
+                    item.get("condition"),
+                    sku,
+                    product_name,
+                    image_url,
+                    now,
+                ))
+                saved += 1
+        conn.commit()
+        print(f"[db] Saved {saved} item(s) to master_table.")
+    finally:
+        conn.close()
+    return saved
+
+
+def search_master_items(query, limit=100):
+    """
+    Search master_table for items where the search text appears anywhere in
+    the Brand, Name, Product Name, or SKU (partial match, case-insensitive) —
+    e.g. "initio" matches brand "Initio", "sauvage" matches name "Dior Sauvage",
+    and "gra100" matches SKU "GRA1003".
+    """
+    print(f"[db] Searching master_table for: {query!r}")
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            like_pattern = f"%{query}%"
+            cur.execute("""
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, product_name, image_url, updated_at
+                FROM master_table
+                WHERE brand ILIKE %s OR name ILIKE %s OR sku ILIKE %s OR product_name ILIKE %s
+                ORDER BY updated_at DESC
+                LIMIT %s;
+            """, (like_pattern, like_pattern, like_pattern, like_pattern, limit))
+            results = cur.fetchall()
+            print(f"[db] Search found {len(results)} result(s).")
+            return results
+    finally:
+        conn.close()
+
+
+def get_master_items(limit=200):
+    """Fetch recent master_table rows for the /admin/data viewer page."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, sku, product_name, image_url, updated_at
+                FROM master_table
+                ORDER BY updated_at DESC
+                LIMIT %s;
+            """, (limit,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_recorded_items(limit=100):
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, shop_name, brand, name, size, concentration, gender, condition, created_at
+                FROM recorded_items
+                ORDER BY created_at DESC
+                LIMIT %s;
+            """, (limit,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_all_corrections(limit=200):
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, shop_name, item_context, field_name, original_value, corrected_value, created_at
+                FROM corrections
+                ORDER BY created_at DESC
+                LIMIT %s;
+            """, (limit,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def build_correction_examples_text(shop_name, limit=15):
+    """Format recent corrections as a short block of examples to inject into the extraction prompt."""
+    corrections = get_recent_corrections(shop_name, limit=limit)
+    if not corrections:
+        return ""
+
+    lines = []
+    for c in corrections:
+        lines.append(
+            f'- For item "{c["item_context"]}", field "{c["field_name"]}": '
+            f'previously misread as "{c["original_value"]}", correct value is "{c["corrected_value"]}".'
+        )
+
+    return (
+        "\n\nHere are corrections from past photos at this shop — use these as guidance for "
+        "similar items, wording, or naming conventions this shop uses:\n" + "\n".join(lines)
+    )
