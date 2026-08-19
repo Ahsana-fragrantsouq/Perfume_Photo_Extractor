@@ -1,23 +1,28 @@
 """
-Handles searching the Airtable "French Inventories" table to find an existing
-product's SKU, so we can link our own master_table records back to Airtable.
+Handles searching Airtable's inventory table to find an existing product's SKU
+(and full display name), so we can link our own master_table records back to Airtable.
 """
 
 import os
 import requests
 
-# These IDs are specific to Fragrant Souq's existing Airtable base — not secret,
-# so it's fine to have them as defaults, but can be overridden via env vars if needed.
+# These IDs point at whichever base/table you're currently using — override in
+# Render's environment variables to switch between test and production bases
+# without touching code:
+#   AIRTABLE_BASE_ID
+#   AIRTABLE_FRENCH_INVENTORIES_TABLE_ID
 AIRTABLE_API_KEY = os.environ.get("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.environ.get("AIRTABLE_BASE_ID", "app5gOqDt9aZrW5bV")
 FRENCH_INVENTORIES_TABLE_ID = os.environ.get("AIRTABLE_FRENCH_INVENTORIES_TABLE_ID", "tblL03CEHdYy1kUdQ")
 
-# Exact field names as they appear in the French Inventories Airtable table
-FIELD_BRAND = "Brand"
-FIELD_NAME = "Perfume Name"
-FIELD_SIZE = "Size"
-FIELD_SKU = "SKU"
-FIELD_PRODUCT_NAME = "Product Name"  # Airtable's own auto-generated full display name
+# Exact field names as they appear in the Airtable table. Also overridable via env
+# vars, since different bases (e.g. a test base vs. the real French Inventories)
+# can use different capitalization for the same fields — e.g. "brand" vs "Brand".
+FIELD_BRAND = os.environ.get("AIRTABLE_FIELD_BRAND", "Brand")
+FIELD_NAME = os.environ.get("AIRTABLE_FIELD_NAME", "Perfume Name")
+FIELD_SIZE = os.environ.get("AIRTABLE_FIELD_SIZE", "Size")
+FIELD_SKU = os.environ.get("AIRTABLE_FIELD_SKU", "SKU")
+FIELD_PRODUCT_NAME = os.environ.get("AIRTABLE_FIELD_PRODUCT_NAME", "Product Name")  # Airtable's own auto-generated full display name
 
 
 def _escape_formula_value(value):
@@ -36,7 +41,7 @@ def _normalize_size(size):
 
 
 def _is_tester_record(record):
-    """Airtable has no dedicated Condition field — but SKUs ending in 'T' (e.g. TMF1035T)
+    """No dedicated Condition field in Airtable — but SKUs ending in 'T' (e.g. TMF1035T)
     are testers, and their 'Product Name (Obsolete)' field literally contains the word
     'Tester' too. Check both, in case one is more reliable than the other for a given row."""
     sku = record["fields"].get(FIELD_SKU, "") or ""
@@ -46,15 +51,17 @@ def _is_tester_record(record):
 
 def find_match(brand, name, size, condition=None):
     """
-    Search French Inventories for a match on Brand + Perfume Name (case-insensitive,
-    whitespace-trimmed), then compare Size ourselves with spacing/case ignored too —
-    e.g. "100ml" matches "100 ml", and "tom ford " matches "Tom Ford".
+    Search the Airtable inventory table for a match on Brand + Perfume Name
+    (case-insensitive, whitespace-trimmed), then compare Size ourselves with
+    spacing/case ignored too — e.g. "100ml" matches "100 ml", and "tom ford "
+    matches "Tom Ford".
 
     Returns a dict {"sku": ..., "product_name": ...} — either value may be None
     if no match was found. `product_name` is Airtable's own auto-generated full
     display name (e.g. "Anfasic Dokhoon Arqa Shay 75 ml EDP Unisex Perfume"),
     pulled directly from their "Product Name" field rather than rebuilt ourselves,
-    so it matches their formatting exactly.
+    so it matches their formatting exactly. If that field doesn't exist on the
+    current table, this is simply None and the caller falls back to building one.
 
     Some products have TWO Airtable rows for the same brand/name/size — a regular
     one and a Tester (SKU ending in "T", e.g. TMF1035 vs TMF1035T). When that happens,
@@ -73,7 +80,7 @@ def find_match(brand, name, size, condition=None):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{FRENCH_INVENTORIES_TABLE_ID}"
 
     # Match on Brand + Perfume Name, ignoring case and leading/trailing whitespace —
-    # ~9,400 hand-entered Airtable records means occasional stray spaces or
+    # thousands of hand-entered Airtable records means occasional stray spaces or
     # capitalization differences are expected, not exceptions.
     # A perfume can also have several rows for different sizes/testers, so we fetch
     # all brand+name matches and pick the right size/condition ourselves below.
@@ -84,7 +91,7 @@ def find_match(brand, name, size, condition=None):
     params = {"filterByFormula": formula, "maxRecords": 50}
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
 
-    print(f"[airtable] Searching French Inventories: brand={brand!r} name={name!r} "
+    print(f"[airtable] Searching for: brand={brand!r} name={name!r} "
           f"(will match size={size!r}, condition={condition!r} separately)")
 
     try:
