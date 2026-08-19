@@ -4,6 +4,7 @@ Handles searching Airtable's inventory table to find an existing product's SKU
 """
 
 import os
+import re
 import requests
 
 # These IDs point at whichever base/table you're currently using — override in
@@ -23,6 +24,8 @@ FIELD_NAME = os.environ.get("AIRTABLE_FIELD_NAME", "Perfume Name")
 FIELD_SIZE = os.environ.get("AIRTABLE_FIELD_SIZE", "Size")
 FIELD_SKU = os.environ.get("AIRTABLE_FIELD_SKU", "SKU")
 FIELD_PRODUCT_NAME = os.environ.get("AIRTABLE_FIELD_PRODUCT_NAME", "Product Name")  # Airtable's own auto-generated full display name
+FIELD_CONCENTRATION = os.environ.get("AIRTABLE_FIELD_CONCENTRATION", "Type")  # e.g. EDP, EDT, Parfum — single-select field
+FIELD_GENDER = os.environ.get("AIRTABLE_FIELD_GENDER", "Category")  # e.g. Men, Women, Unisex — single-select field
 
 
 def _escape_formula_value(value):
@@ -144,3 +147,152 @@ def find_match(brand, name, size, condition=None):
         # Network/API errors shouldn't crash the whole save — just log and leave everything blank
         print(f"[airtable] Search failed: {e}")
         return no_match
+
+
+def _generate_brand_prefix(brand):
+    """Builds a 3-letter prefix from a brand name for brand-new SKUs, e.g.
+    'Tom Ford' -> 'TF' -> padded to 'TFO'. Best-effort — existing brands reuse
+    their real prefix instead (see _find_existing_sku_pattern); this only
+    kicks in for a brand with zero prior Airtable records."""
+    words = re.findall(r"[A-Za-z]+", brand)
+    letters = "".join(w[0].upper() for w in words if w)
+    if len(letters) >= 3:
+        return letters[:3]
+    if words:
+        # Not enough separate words — pad using extra letters from the last word
+        last_word = words[-1]
+        return (letters + last_word[1:].upper())[:3]
+    return "GEN"
+
+
+def _find_existing_sku_pattern(brand):
+    """Looks at this brand's existing SKUs in Airtable to find its established
+    prefix + the highest number used so far. Returns (prefix, next_number, pad_width)
+    or None if this brand has no existing records."""
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{FRENCH_INVENTORIES_TABLE_ID}"
+    formula = 'LOWER(TRIM({%s}))="%s"' % (FIELD_BRAND, _escape_formula_value(brand.strip().lower()))
+    params = {"filterByFormula": formula, "maxRecords": 100, "fields[]": FIELD_SKU}
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+
+    response = requests.get(url, headers=headers, params=params, timeout=10)
+    response.raise_for_status()
+    records = response.json().get("records", [])
+
+    parsed = []
+    for record in records:
+        sku = (record["fields"].get(FIELD_SKU) or "").strip()
+        m = re.match(r"^([A-Za-z]+)(\d+)", sku)
+        if m:
+            parsed.append((m.group(1).upper(), m.group(2)))
+
+    if not parsed:
+        return None
+
+    # Use whichever prefix is most common among this brand's existing SKUs
+    prefixes = [p for p, _ in parsed]
+    prefix = max(set(prefixes), key=prefixes.count)
+    numbers = [int(n) for p, n in parsed if p == prefix]
+    pad_width = max(len(n) for p, n in parsed if p == prefix)
+    return prefix, max(numbers) + 1, pad_width
+
+
+def _find_next_number_for_prefix(prefix):
+    """When a brand has no existing SKUs, we still need to avoid colliding with
+    some OTHER brand that happens to use the same generated prefix. Checks all
+    SKUs starting with this prefix (any brand) and returns the next free number."""
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{FRENCH_INVENTORIES_TABLE_ID}"
+    formula = 'LEFT(UPPER({%s}), %d)="%s"' % (FIELD_SKU, len(prefix), prefix)
+    params = {"filterByFormula": formula, "maxRecords": 100, "fields[]": FIELD_SKU}
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+
+    response = requests.get(url, headers=headers, params=params, timeout=10)
+    response.raise_for_status()
+    records = response.json().get("records", [])
+
+    numbers = []
+    for record in records:
+        sku = (record["fields"].get(FIELD_SKU) or "").strip()
+        m = re.match(r"^" + re.escape(prefix) + r"(\d+)", sku, re.IGNORECASE)
+        if m:
+            numbers.append(int(m.group(1)))
+
+    return (max(numbers) + 1) if numbers else 1001
+
+
+def generate_sku(brand):
+    """
+    Auto-generates a new SKU for a brand, matching the style of existing SKUs
+    (e.g. 'TMF1035', 'GRA1001'): a short brand prefix + an incrementing number.
+
+    - If this brand already has SKUs in Airtable, reuses that brand's real
+      prefix and continues the numbering from its highest existing SKU.
+    - If not, builds a new prefix from the brand name and starts at ...1001,
+      checking for collisions with any other brand already using that prefix.
+    """
+    existing = _find_existing_sku_pattern(brand)
+    if existing:
+        prefix, next_number, pad_width = existing
+        sku = f"{prefix}{str(next_number).zfill(pad_width)}"
+        print(f"[airtable] Generated SKU {sku!r} continuing {brand!r}'s existing prefix {prefix!r}")
+        return sku
+
+    prefix = _generate_brand_prefix(brand)
+    next_number = _find_next_number_for_prefix(prefix)
+    sku = f"{prefix}{str(next_number).zfill(4)}"
+    print(f"[airtable] Generated SKU {sku!r} with new prefix {prefix!r} for brand {brand!r} (no prior records)")
+    return sku
+
+
+def create_record(brand, name, size, concentration, gender):
+    """
+    Creates a brand-new record in the Airtable inventory table for an item that
+    had no existing match, with an auto-generated SKU.
+
+    Uses Airtable's `typecast` option so that Concentration/Gender values that
+    don't exactly match an existing single-select option (case, spelling, etc.)
+    get added as new options automatically, rather than the write failing outright —
+    the existing option lists for these fields aren't perfectly consistent already.
+
+    Returns the new SKU string on success, or None if the write failed (logged either way).
+    """
+    if not AIRTABLE_API_KEY:
+        print("[airtable] AIRTABLE_API_KEY not set — cannot create record.")
+        return None
+
+    if not brand or not name:
+        print(f"[airtable] Missing brand/name (brand={brand!r}, name={name!r}) — cannot create record.")
+        return None
+
+    sku = generate_sku(brand)
+
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{FRENCH_INVENTORIES_TABLE_ID}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+
+    fields = {
+        FIELD_BRAND: brand,
+        FIELD_NAME: name,
+        FIELD_SKU: sku,
+    }
+    if size:
+        fields[FIELD_SIZE] = size
+    if concentration:
+        fields[FIELD_CONCENTRATION] = concentration
+    if gender:
+        fields[FIELD_GENDER] = gender
+
+    body = {"records": [{"fields": fields}], "typecast": True}
+
+    print(f"[airtable] Creating new record: {fields}")
+
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=10)
+        response.raise_for_status()
+        created = response.json()["records"][0]
+        print(f"[airtable] Record created successfully — id={created['id']}, SKU={sku!r}")
+        return sku
+    except requests.RequestException as e:
+        detail = ""
+        if getattr(e, "response", None) is not None:
+            detail = f" — {e.response.text}"
+        print(f"[airtable] Failed to create record: {e}{detail}")
+        return None

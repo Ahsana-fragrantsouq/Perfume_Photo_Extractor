@@ -281,6 +281,44 @@ def admin_data():
     )
 
 
+@app.route("/admin/create-in-airtable", methods=["POST"])
+def admin_create_in_airtable():
+    """Creates a brand-new Airtable record for a master_table row that has no SKU,
+    auto-generating a SKU, and syncs it back to master_table on success.
+    POST /admin/create-in-airtable?key=YOUR_KEY
+    body: {"id": 26, "brand": "...", "name": "...", "size": "...", "concentration": "...", "gender": "..."}"""
+    admin_key = os.environ.get("ADMIN_KEY")
+    if not admin_key or request.args.get("key") != admin_key:
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
+
+    try:
+        row_id = int(data["id"])
+    except (KeyError, ValueError, TypeError):
+        return jsonify({"error": "Missing or invalid 'id'"}), 400
+
+    brand = (data.get("brand") or "").strip()
+    name = (data.get("name") or "").strip()
+    size = (data.get("size") or "").strip()
+    concentration = (data.get("concentration") or "").strip()
+    gender = (data.get("gender") or "").strip()
+
+    if not brand or not name:
+        return jsonify({"error": "Brand and Name are required to create an Airtable record."}), 400
+
+    try:
+        sku = airtable_client.create_record(brand, name, size, concentration, gender)
+        if not sku:
+            return jsonify({"error": "Failed to create the Airtable record. Check the server logs for details."}), 502
+
+        db.update_skus([{"id": row_id, "sku": sku}])
+        return jsonify({"sku": sku}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
 @app.route("/admin/update-sku", methods=["POST"])
 def admin_update_sku():
     admin_key = os.environ.get("ADMIN_KEY")

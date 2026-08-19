@@ -17,6 +17,7 @@
   .table-actions { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
   button { background: #111; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   button:disabled { background: #999; cursor: not-allowed; }
+  .save-airtable-btn { padding: 4px 10px; font-size: 12px; background: #0a7a3d; }
   .danger-zone { border: 2px solid #b00020; border-radius: 8px; padding: 16px; margin-top: 20px; background: #fff5f5; }
   .danger-zone h2 { margin-top: 0; color: #b00020; }
   .danger-zone input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 6px; width: 260px; margin-right: 10px; }
@@ -48,11 +49,12 @@
       <tr>
         <th class="checkbox-cell"><input type="checkbox" class="select-all" data-table="{{ table_name }}"></th>
         {% for c in columns %}<th>{{ labels.get(c, c) }}</th>{% endfor %}
+        {% if table_name == 'master_table' %}<th>Airtable</th>{% endif %}
       </tr>
     </thead>
     <tbody>
       {% for row in rows %}
-      <tr>
+      <tr data-row-id="{{ row.id }}">
         <td class="checkbox-cell"><input type="checkbox" class="row-check" data-table="{{ table_name }}" data-id="{{ row.id }}"></td>
         {% for c in columns %}
           {% if c == 'image_url' %}
@@ -60,9 +62,23 @@
           {% elif c == 'sku' and table_name == 'master_table' %}
             <td><input type="text" class="sku-input" data-id="{{ row.id }}" data-original="{{ row[c] if row[c] is not none else '' }}" value="{{ row[c] if row[c] is not none else '' }}"></td>
           {% else %}
-            <td>{{ row[c] if row[c] is not none else '' }}</td>
+            <td class="cell-{{ c }}">{{ row[c] if row[c] is not none else '' }}</td>
           {% endif %}
         {% endfor %}
+        {% if table_name == 'master_table' %}
+          <td>
+            {% if not row.sku %}
+            <button class="save-airtable-btn"
+              onclick="saveToAirtable(this)"
+              data-id="{{ row.id }}"
+              data-brand="{{ row.brand or '' }}"
+              data-name="{{ row.name or '' }}"
+              data-size="{{ row.size or '' }}"
+              data-concentration="{{ row.concentration or '' }}"
+              data-gender="{{ row.gender or '' }}">Save to Airtable</button>
+            {% endif %}
+          </td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>
@@ -135,6 +151,43 @@ async function updateSkus() {
   } catch (err) {
     statusEl.textContent = `Request failed: ${err.message}`;
     statusEl.className = "status-msg status-error";
+  }
+}
+
+async function saveToAirtable(button) {
+  const { id, brand, name, size, concentration, gender } = button.dataset;
+
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "Saving...";
+
+  try {
+    const res = await fetch(`/admin/create-in-airtable?key=${encodeURIComponent(ADMIN_KEY)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: parseInt(id, 10), brand, name, size, concentration, gender }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      alert(`Error: ${data.error || "Unknown error"}`);
+      button.disabled = false;
+      button.textContent = originalText;
+      return;
+    }
+
+    // Update the SKU cell in place, then remove this button since it's no longer needed
+    const row = button.closest("tr");
+    const skuInput = row.querySelector(".sku-input");
+    if (skuInput) {
+      skuInput.value = data.sku;
+      skuInput.dataset.original = data.sku;
+    }
+    button.remove();
+  } catch (err) {
+    alert(`Request failed: ${err.message}`);
+    button.disabled = false;
+    button.textContent = originalText;
   }
 }
 

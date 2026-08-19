@@ -8,9 +8,6 @@ import os
 import cloudinary
 import cloudinary.uploader
 
-# Configure Cloudinary from environment variables (set these in Render).
-# If they're missing, upload_image() just returns None and the app keeps working —
-# image_url will simply be blank until Cloudinary is set up.
 cloudinary.config(
     cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
     api_key=os.environ.get("CLOUDINARY_API_KEY"),
