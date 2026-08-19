@@ -37,7 +37,13 @@ def get_conn():
         user=os.environ["DB_USER"],
         password=os.environ["DB_PASSWORD"],
         sslmode=os.environ.get("DB_SSLMODE", "prefer"),
-        connect_timeout=10,
+        # Kept short on purpose: this connection sits on the critical path of every
+        # /extract call (build_extraction_prompt looks up past corrections before
+        # calling Claude). A long timeout here, combined with Claude's own response
+        # time, can exceed gunicorn's worker timeout and crash the whole request.
+        # Failing fast means the person still gets their extraction results even if
+        # the database is temporarily unreachable.
+        connect_timeout=3,
     )
 
 
