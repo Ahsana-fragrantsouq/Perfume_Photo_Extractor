@@ -19,7 +19,7 @@ FRENCH_INVENTORIES_TABLE_ID = os.environ.get("AIRTABLE_FRENCH_INVENTORIES_TABLE_
 # Exact field names as they appear in the Airtable table. Overridable via env vars
 # if you switch to a table with different capitalization, but these defaults match
 # your current table (test base uses lowercase "brand"/"size").
-FIELD_BRAND = os.environ.get("AIRTABLE_FIELD_BRAND", "brand")
+FIELD_BRAND = os.environ.get("AIRTABLE_FIELD_BRAND", "Brand")
 FIELD_NAME = os.environ.get("AIRTABLE_FIELD_NAME", "Perfume Name")
 FIELD_SIZE = os.environ.get("AIRTABLE_FIELD_SIZE", "size")
 FIELD_SKU = os.environ.get("AIRTABLE_FIELD_SKU", "SKU")
