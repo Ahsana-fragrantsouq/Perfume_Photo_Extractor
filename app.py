@@ -308,10 +308,18 @@ def admin_create_in_airtable():
         return jsonify({"error": "Brand and Name are required to create an Airtable record."}), 400
 
     try:
-        sku = airtable_client.create_record(brand, name, size, concentration, gender)
-        if not sku:
+        result = airtable_client.create_record(brand, name, size, concentration, gender)
+
+        if result["status"] == "no_brand":
+            return jsonify({"error": "no_brand", "message": f"No brand found in Brands table matching '{brand}'."}), 404
+
+        if result["status"] == "no_prefix":
+            return jsonify({"error": "no_prefix", "message": f"Brand '{brand}' has no SKU Prefix set in the Brands table."}), 404
+
+        if result["status"] != "ok":
             return jsonify({"error": "Failed to create the Airtable record. Check the server logs for details."}), 502
 
+        sku = result["sku"]
         db.update_skus([{"id": row_id, "sku": sku}])
         return jsonify({"sku": sku}), 200
 

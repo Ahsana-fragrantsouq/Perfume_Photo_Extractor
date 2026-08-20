@@ -18,6 +18,7 @@
   button { background: #111; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   button:disabled { background: #999; cursor: not-allowed; }
   .save-airtable-btn { padding: 4px 10px; font-size: 12px; background: #0a7a3d; }
+  .save-airtable-btn:disabled { background: #999; color: #eee; cursor: not-allowed; }
   .danger-zone { border: 2px solid #b00020; border-radius: 8px; padding: 16px; margin-top: 20px; background: #fff5f5; }
   .danger-zone h2 { margin-top: 0; color: #b00020; }
   .danger-zone input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 6px; width: 260px; margin-right: 10px; }
@@ -170,6 +171,15 @@ async function saveToAirtable(button) {
     const data = await res.json();
 
     if (!res.ok) {
+      if (data.error === "no_brand" || data.error === "no_prefix") {
+        // No point letting them retry — the brand genuinely isn't set up in
+        // Airtable's Brands table yet. Leave this state permanently, don't reset.
+        button.textContent = data.error === "no_brand" ? "No brands available" : "No SKU prefix set";
+        button.title = data.message || "";
+        button.disabled = true;
+        return;
+      }
+
       alert(`Error: ${data.error || "Unknown error"}`);
       button.disabled = false;
       button.textContent = originalText;
