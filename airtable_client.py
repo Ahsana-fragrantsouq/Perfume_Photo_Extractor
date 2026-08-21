@@ -21,7 +21,7 @@ FRENCH_INVENTORIES_TABLE_ID = os.environ.get("AIRTABLE_FRENCH_INVENTORIES_TABLE_
 # your current table (test base uses lowercase "brand"/"size").
 FIELD_BRAND = os.environ.get("AIRTABLE_FIELD_BRAND", "Brand")
 FIELD_NAME = os.environ.get("AIRTABLE_FIELD_NAME", "Perfume Name")
-FIELD_SIZE = os.environ.get("AIRTABLE_FIELD_SIZE", "size")
+FIELD_SIZE = os.environ.get("AIRTABLE_FIELD_SIZE", "Size")
 FIELD_SKU = os.environ.get("AIRTABLE_FIELD_SKU", "SKU")
 FIELD_PRODUCT_NAME = os.environ.get("AIRTABLE_FIELD_PRODUCT_NAME", "Product Name")  # Airtable's own auto-generated full display name
 FIELD_CONCENTRATION = os.environ.get("AIRTABLE_FIELD_CONCENTRATION", "Type")  # e.g. EDP, EDT, Parfum — single-select field
