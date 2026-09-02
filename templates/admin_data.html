@@ -216,11 +216,11 @@ document.querySelectorAll(".select-all").forEach(selectAll => {
   });
 });
 
-/*
-DISABLED — deleteSelected(). Pairs with the "Delete selected" button that's
-commented out above, and the /admin/delete route in app.py (still active,
-just unused from this page). To bring this back: remove this comment wrapper
-and the matching one around the button further up.
+
+// DISABLED — deleteSelected(). Pairs with the "Delete selected" button that's
+// commented out above, and the /admin/delete route in app.py (still active,
+// just unused from this page). To bring this back: remove this comment wrapper
+// and the matching one around the button further up.
 
 async function deleteSelected(table) {
   const checked = document.querySelectorAll(`.row-check[data-table="${table}"]:checked`);
@@ -262,13 +262,14 @@ async function deleteSelected(table) {
     statusEl.className = "status-msg status-error";
   }
 }
-*/
+
 
 /*
 DISABLED — Full reset JS. Pairs with the danger-zone HTML commented out above,
 and the /admin/clear-all route in app.py (still active, just unused from this
 page). To bring this back: remove this comment wrapper and the matching one
 around the danger-zone HTML further up.
+*/
 
 const confirmInput = document.getElementById("confirmInput");
 const clearAllBtn = document.getElementById("clearAllBtn");
@@ -311,7 +312,7 @@ clearAllBtn.addEventListener("click", async () => {
     clearAllBtn.disabled = false;
   }
 });
-*/
+
 </script>
 
 </body>
