@@ -61,6 +61,9 @@
 </form>
 
 <div id="results"></div>
+<datalist id="concentrationOptions"></datalist>
+<datalist id="genderOptions"></datalist>
+<datalist id="conditionOptions"></datalist>
 
 <script>
 const FIELDS = ["brand", "name", "size", "concentration", "gender", "condition"];
@@ -76,6 +79,10 @@ let currentImageUrl = null;   // filled in from /extract's response, sent back t
 let originalItems = [];   // exactly what Claude returned, never mutated
 let savedSnapshots = {};  // row index (string) -> the corrected values as of its last successful save; absent = never saved
 
+// Fields that get an autocomplete dropdown in the results table (built from
+// every value ever used, but still freely editable for new/unseen values)
+const AUTOCOMPLETE_FIELDS = ["concentration", "gender", "condition"];
+
 // Populate the Shop name autocomplete list with every shop used before
 (async function loadShopNames() {
   try {
@@ -90,6 +97,29 @@ let savedSnapshots = {};  // row index (string) -> the corrected values as of it
     // Autocomplete is a convenience, not a requirement — say nothing if it fails
   }
 })();
+
+// Populate Concentration/Gender/Condition autocomplete lists, used once the
+// results table renders. Fetched once up front so it's ready by the time
+// items are extracted (rather than re-fetching per photo).
+let fieldOptionsPromise = (async () => {
+  try {
+    const res = await fetch("/api/field-options");
+    if (!res.ok) return {};
+    return await res.json();
+  } catch (err) {
+    return {}; // same as above — table still works without suggestions
+  }
+})();
+
+fieldOptionsPromise.then(options => {
+  AUTOCOMPLETE_FIELDS.forEach(f => {
+    const datalist = document.getElementById(`${f}Options`);
+    if (!datalist) return;
+    datalist.innerHTML = (options[f] || [])
+      .map(val => `<option value="${escapeHtml(val)}"></option>`)
+      .join("");
+  });
+});
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -143,7 +173,8 @@ function renderTable(items) {
     html += `<tr data-row="${i}"><td class="checkbox-cell"><input type="checkbox" class="row-select"></td>`;
     FIELDS.forEach(f => {
       const val = item[f] ?? "";
-      html += `<td><input type="text" class="field-input" data-field="${f}" value="${escapeHtml(val)}"></td>`;
+      const listAttr = AUTOCOMPLETE_FIELDS.includes(f) ? ` list="${f}Options"` : "";
+      html += `<td><input type="text" class="field-input" data-field="${f}" value="${escapeHtml(val)}"${listAttr}></td>`;
     });
     html += `<td class="confidence-${item.confidence ?? ''}">${item.confidence ?? "-"}</td></tr>`;
   });

@@ -162,6 +162,21 @@ def extract_json(text):
     return json.loads(text)
 
 
+@app.route("/api/field-options")
+@api_login_required
+def api_field_options():
+    """Powers the autocomplete dropdowns for Concentration/Gender/Condition on the
+    extraction results table — every value ever used for each field."""
+    try:
+        return jsonify({
+            "concentration": db.get_distinct_field_values("concentration"),
+            "gender": db.get_distinct_field_values("gender"),
+            "condition": db.get_distinct_field_values("condition"),
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
 @app.route("/api/shop-names")
 @api_login_required
 def api_shop_names():

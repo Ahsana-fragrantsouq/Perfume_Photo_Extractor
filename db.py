@@ -421,6 +421,37 @@ def get_all_corrections(limit=200):
         conn.close()
 
 
+FIELD_OPTION_COLUMNS = {"concentration", "gender", "condition"}
+
+
+def get_distinct_field_values(column, limit=100):
+    """
+    Distinct non-empty values ever used for one field (concentration/gender/condition),
+    pulled from both recorded_items and master_table for the broadest coverage —
+    powers the autocomplete dropdowns on the extraction results table.
+    `column` is checked against an allowlist since it can't be parameterized like a value.
+    """
+    if column not in FIELD_OPTION_COLUMNS:
+        raise ValueError(f"Invalid field: {column!r}. Must be one of {FIELD_OPTION_COLUMNS}.")
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # column name is validated against FIELD_OPTION_COLUMNS above, so this is safe
+            cur.execute(f"""
+                SELECT DISTINCT {column} FROM (
+                    SELECT {column} FROM recorded_items WHERE {column} IS NOT NULL AND {column} != ''
+                    UNION
+                    SELECT {column} FROM master_table WHERE {column} IS NOT NULL AND {column} != ''
+                ) AS combined
+                ORDER BY {column}
+                LIMIT %s;
+            """, (limit,))
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_distinct_shop_names(limit=200):
     """
     All shop names ever used, across both recorded_items (every extraction attempt)
