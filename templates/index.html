@@ -28,14 +28,17 @@
   .confidence-medium { color: #a67c00; }
   .confidence-high { color: #1a7a1a; }
   .actions { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
-  .top-bar { display: flex; justify-content: space-between; align-items: baseline; }
-  .top-bar a.search-link { font-size: 14px; color: #111; text-decoration: none; border: 1px solid #111; padding: 6px 14px; border-radius: 6px; white-space: nowrap; }
+  .top-bar { position: relative; text-align: center; }
+  .top-bar a.search-link { position: absolute; top: 4px; right: 0; font-size: 14px; color: #111; text-decoration: none; border: 1px solid #111; padding: 6px 14px; border-radius: 6px; white-space: nowrap; }
   .top-bar a.search-link:hover { background: #111; color: #fff; }
+  .top-bar a.logout-link { position: absolute; top: 4px; left: 0; font-size: 13px; color: #666; text-decoration: none; }
+  .top-bar a.logout-link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
 <div class="top-bar">
+  <a href="/logout" class="logout-link">Log out</a>
   <div>
     <h1>Perfume Photo Extractor</h1>
     <p class="sub">Upload a shelf photo and the shop name — items will be listed below. Fix anything wrong, then select which items to record.</p>
@@ -68,6 +71,23 @@ const submitBtn = document.getElementById("submitBtn");
 let currentShopName = "";
 let currentImageUrl = null;   // filled in from /extract's response, sent back to /record
 let originalItems = [];   // exactly what Claude returned, never mutated
+let lastSavedSelectionSignature = null;   // which row indices were selected in the last successful save
+
+function getCurrentSelectionSignature() {
+  const rows = document.querySelectorAll("#itemsTable tbody tr");
+  const selectedIndices = Array.from(rows)
+    .filter(row => row.querySelector(".row-select").checked)
+    .map(row => row.dataset.row);
+  return JSON.stringify(selectedIndices.sort());
+}
+
+function refreshSaveButtonState() {
+  const saveBtn = document.getElementById("saveBtn");
+  if (!saveBtn) return;
+  // Re-enable as soon as the checked selection differs from what was last saved —
+  // a different selection is a genuinely different save, not a duplicate.
+  saveBtn.disabled = getCurrentSelectionSignature() === lastSavedSelectionSignature;
+}
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -96,6 +116,7 @@ form.addEventListener("submit", async (e) => {
     statusEl.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}". Review and correct below, then select which to record.`;
     originalItems = data.items;
     currentImageUrl = data.image_url ?? null;
+    lastSavedSelectionSignature = null; // fresh photo — nothing saved yet for this batch
 
     renderTable(data.items);
   } catch (err) {
@@ -137,7 +158,6 @@ function renderTable(items) {
 
   resultsEl.innerHTML = html;
 
-  // Mark cells as edited (visually) when the user changes them from the original value
   document.querySelectorAll(".field-input").forEach(input => {
     const originalValue = input.value;
     input.addEventListener("input", () => {
@@ -147,9 +167,14 @@ function renderTable(items) {
 
   document.getElementById("selectAllBtn").addEventListener("click", () => {
     document.querySelectorAll(".row-select").forEach(cb => cb.checked = true);
+    refreshSaveButtonState();
   });
   document.getElementById("deselectAllBtn").addEventListener("click", () => {
     document.querySelectorAll(".row-select").forEach(cb => cb.checked = false);
+    refreshSaveButtonState();
+  });
+  document.querySelectorAll(".row-select").forEach(cb => {
+    cb.addEventListener("change", refreshSaveButtonState);
   });
   document.getElementById("saveBtn").addEventListener("click", saveSelectedItems);
 }
@@ -169,6 +194,8 @@ async function saveSelectedItems() {
     return { original: originalItems[i], corrected, selected };
   });
 
+  const selectionSignatureBeingSaved = getCurrentSelectionSignature();
+
   saveBtn.disabled = true;
   recordStatusEl.textContent = "Saving...";
   recordStatusEl.className = "";
@@ -183,14 +210,17 @@ async function saveSelectedItems() {
 
     if (!res.ok) {
       recordStatusEl.innerHTML = `<div class="error">Error: ${data.error || "Unknown error"}</div>`;
+      saveBtn.disabled = false; // allow retry after a failure
       return;
     }
 
-    recordStatusEl.textContent = `Saved ${data.items_saved} item(s) to the database. Logged ${data.corrections_logged} correction(s) for future accuracy.`;
+    recordStatusEl.textContent = `Saved ${data.items_saved} item(s) to the database. Logged ${data.corrections_logged} correction(s) for future accuracy. Change the selection to save a different set.`;
+    // Remember exactly what was saved — the button stays disabled only for
+    // this same selection. Checking/unchecking anything re-enables it.
+    lastSavedSelectionSignature = selectionSignatureBeingSaved;
   } catch (err) {
     recordStatusEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
-  } finally {
-    saveBtn.disabled = false;
+    saveBtn.disabled = false; // allow retry after a failure
   }
 }
 

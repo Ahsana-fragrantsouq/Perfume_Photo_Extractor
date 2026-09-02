@@ -8,6 +8,7 @@
   h1 { font-size: 20px; margin-bottom: 4px; }
   p.sub { color: #666; margin-top: 0; }
   .top-bar { display: flex; justify-content: space-between; align-items: baseline; }
+  .top-bar .links { display: flex; gap: 16px; align-items: baseline; }
   .top-bar a { font-size: 14px; color: #111; text-decoration: none; }
   .search-box { display: flex; gap: 8px; margin-top: 20px; }
   input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 15px; }
@@ -27,7 +28,10 @@
     <h1>Search Perfumes</h1>
     <p class="sub">Search saved items by brand, name, or SKU.</p>
   </div>
-  <a href="/">&larr; Back to upload</a>
+  <div class="links">
+    <a href="/">&larr; Back to upload</a>
+    <a href="/logout">Log out</a>
+  </div>
 </div>
 
 <div class="search-box">
@@ -89,8 +93,8 @@ function renderResults(results) {
     return;
   }
 
-  const columns = ["shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "image_url", "updated_at"];
-  const labels = { shop_name: "Shop", brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition", sku: "SKU", image_url: "Photo", updated_at: "Last Updated" };
+  const columns = ["shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "product_name", "image_url", "updated_at"];
+  const labels = { shop_name: "Shop", brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition", sku: "SKU", product_name: "Full Product Name", image_url: "Photo", updated_at: "Last Updated" };
 
   let html = "<table><thead><tr>";
   columns.forEach(c => html += `<th>${labels[c]}</th>`);

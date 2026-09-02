@@ -3,8 +3,10 @@ import base64
 import json
 import re
 import io
+from functools import wraps
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from werkzeug.security import check_password_hash
 from PIL import Image
 import anthropic
 import psycopg2
@@ -14,6 +16,10 @@ import airtable_client
 import photo_storage
 
 app = Flask(__name__)
+
+# Needed for login sessions. Set FLASK_SECRET_KEY in Render — without it, everyone
+# gets logged out whenever the app restarts (a new random key would be used each time).
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-insecure-key-change-in-render")
 
 # Anthropic client — reads ANTHROPIC_API_KEY from environment (set this in Render)
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -29,6 +35,31 @@ try:
     db.init_db()
 except Exception as e:
     print(f"[startup] Skipping DB init: {e}")
+
+
+def login_required(view_func):
+    """For pages the browser navigates to directly (GET requests that render HTML).
+    Redirects to /login (and back again afterward) if there's no active session."""
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect(url_for("login", next=request.path))
+        return view_func(*args, **kwargs)
+    return wrapped
+
+
+def api_login_required(view_func):
+    """For AJAX/fetch-called endpoints. A redirect wouldn't make sense here (the
+    JS would just receive the login page's HTML and fail to parse it as JSON),
+    so this returns a plain 401 instead — the calling page's own login_required
+    already ensures nobody reaches this without a session in normal use; this
+    is the fallback for a session that expired mid-page-visit."""
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            return jsonify({"error": "not_logged_in", "message": "Please log in again."}), 401
+        return view_func(*args, **kwargs)
+    return wrapped
 
 EXTRACTION_PROMPT_BASE = """You are looking at a photo of perfumes/fragrances taken inside a shop.
 
@@ -111,12 +142,44 @@ def extract_json(text):
     return json.loads(text)
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password", "")
+
+        user = None
+        try:
+            user = db.get_user_by_username(username)
+        except Exception as e:
+            error = f"Could not check login right now: {e}"
+
+        if user and check_password_hash(user["password_hash"], password):
+            session["user_id"] = user["id"]
+            session["username"] = user["username"]
+            next_url = request.args.get("next") or url_for("index")
+            return redirect(next_url)
+        elif not error:
+            error = "Incorrect username or password."
+
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
 
 @app.route("/extract", methods=["POST"])
+@api_login_required
 def extract():
     if "photo" not in request.files:
         return jsonify({"error": "No photo file provided. Use form field name 'photo'."}), 400
@@ -214,6 +277,7 @@ def build_fallback_product_name(item):
 
 
 @app.route("/record", methods=["POST"])
+@api_login_required
 def record():
     data = request.get_json(silent=True)
     if not data:
@@ -258,13 +322,8 @@ def record():
 
 
 @app.route("/admin/data")
+@login_required
 def admin_data():
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key:
-        return "ADMIN_KEY is not set in the environment. Add one in Render to use this page.", 503
-    if request.args.get("key") != admin_key:
-        return "Forbidden: missing or incorrect ?key=", 403
-
     try:
         master_items = db.get_master_items(limit=500)
         recorded_items = db.get_recorded_items(limit=500)
@@ -277,20 +336,15 @@ def admin_data():
         master_items=master_items,
         recorded_items=recorded_items,
         corrections=corrections,
-        admin_key=admin_key,
     )
 
 
 @app.route("/admin/create-in-airtable", methods=["POST"])
+@api_login_required
 def admin_create_in_airtable():
     """Creates a brand-new Airtable record for a master_table row that has no SKU,
     auto-generating a SKU, and syncs it back to master_table on success.
-    POST /admin/create-in-airtable?key=YOUR_KEY
     body: {"id": 26, "brand": "...", "name": "...", "size": "...", "concentration": "...", "gender": "..."}"""
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key or request.args.get("key") != admin_key:
-        return jsonify({"error": "Forbidden"}), 403
-
     data = request.get_json(silent=True) or {}
 
     try:
@@ -328,11 +382,8 @@ def admin_create_in_airtable():
 
 
 @app.route("/admin/update-sku", methods=["POST"])
+@api_login_required
 def admin_update_sku():
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key or request.args.get("key") != admin_key:
-        return jsonify({"error": "Forbidden"}), 403
-
     data = request.get_json(silent=True) or {}
     updates = data.get("updates", [])
 
@@ -353,11 +404,8 @@ def admin_update_sku():
 
 
 @app.route("/admin/delete", methods=["POST"])
+@api_login_required
 def admin_delete():
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key or request.args.get("key") != admin_key:
-        return jsonify({"error": "Forbidden"}), 403
-
     data = request.get_json(silent=True) or {}
     table = data.get("table")
     raw_ids = data.get("ids", [])
@@ -377,11 +425,8 @@ def admin_delete():
 
 
 @app.route("/admin/clear-all", methods=["POST"])
+@api_login_required
 def admin_clear_all():
-    admin_key = os.environ.get("ADMIN_KEY")
-    if not admin_key or request.args.get("key") != admin_key:
-        return jsonify({"error": "Forbidden"}), 403
-
     data = request.get_json(silent=True) or {}
     if data.get("confirm") != "DELETE ALL":
         return jsonify({"error": "Confirmation phrase did not match. Nothing was deleted."}), 400
@@ -394,11 +439,13 @@ def admin_clear_all():
 
 
 @app.route("/search")
+@login_required
 def search_page():
     return render_template("search.html")
 
 
 @app.route("/api/search")
+@api_login_required
 def api_search():
     query = (request.args.get("q") or "").strip()
     if not query:

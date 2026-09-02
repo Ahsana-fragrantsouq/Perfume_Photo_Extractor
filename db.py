@@ -103,8 +103,64 @@ def init_db():
             if cur.fetchone():
                 print("[db] Migrating master_table: renaming created_at -> updated_at")
                 cur.execute("ALTER TABLE master_table RENAME COLUMN created_at TO updated_at;")
+
+            # User accounts for logging into the whole app. Passwords are stored as
+            # hashes (see auth.py), never plain text.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                );
+            """)
         conn.commit()
         print("[db] Tables ready.")
+    finally:
+        conn.close()
+
+    _seed_admin_user_if_needed()
+
+
+def _seed_admin_user_if_needed():
+    """If there are no users at all yet, create one from ADMIN_USERNAME/ADMIN_PASSWORD
+    env vars — otherwise nobody could ever log in for the first time. Once at least
+    one user exists, this does nothing (existing accounts are never touched)."""
+    from werkzeug.security import generate_password_hash
+
+    username = os.environ.get("ADMIN_USERNAME")
+    password = os.environ.get("ADMIN_PASSWORD")
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users;")
+            (count,) = cur.fetchone()
+            if count > 0:
+                return
+
+            if not username or not password:
+                print("[db] No users exist yet, and ADMIN_USERNAME/ADMIN_PASSWORD aren't set — "
+                      "nobody will be able to log in until you set those env vars and redeploy.")
+                return
+
+            cur.execute(
+                "INSERT INTO users (username, password_hash, created_at) VALUES (%s, %s, %s);",
+                (username, generate_password_hash(password), datetime.now(timezone.utc)),
+            )
+        conn.commit()
+        print(f"[db] Seeded initial admin user {username!r} from ADMIN_USERNAME/ADMIN_PASSWORD.")
+    finally:
+        conn.close()
+
+
+def get_user_by_username(username):
+    """Looks up a user by username (case-sensitive). Returns {'id', 'username', 'password_hash'} or None."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT id, username, password_hash FROM users WHERE username = %s;", (username,))
+            return cur.fetchone()
     finally:
         conn.close()
 

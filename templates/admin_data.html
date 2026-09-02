@@ -31,6 +31,7 @@
 <body>
 
 <h1>Saved Data</h1>
+<p style="margin-top:-10px;"><a href="{{ url_for('logout') }}">Log out</a></p>
 
 <!--
 DISABLED — Full Reset section. Backend routes (/admin/clear-all in app.py,
@@ -117,8 +118,6 @@ the "Full reset" JS block further down.
 {{ render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"], {}, "corrections") }}
 
 <script>
-const ADMIN_KEY = {{ admin_key|tojson }};
-
 // Highlight SKU cells that have been changed from their original value
 document.querySelectorAll(".sku-input").forEach(input => {
   input.addEventListener("input", () => {
@@ -142,7 +141,7 @@ async function updateSkus() {
   statusEl.className = "status-msg";
 
   try {
-    const res = await fetch(`/admin/update-sku?key=${encodeURIComponent(ADMIN_KEY)}`, {
+    const res = await fetch("/admin/update-sku", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ updates: changed }),
@@ -172,7 +171,7 @@ async function saveToAirtable(button) {
   button.textContent = "Saving...";
 
   try {
-    const res = await fetch(`/admin/create-in-airtable?key=${encodeURIComponent(ADMIN_KEY)}`, {
+    const res = await fetch("/admin/create-in-airtable", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: parseInt(id, 10), brand, name, size, concentration, gender }),
@@ -242,7 +241,7 @@ async function deleteSelected(table) {
   statusEl.className = "status-msg";
 
   try {
-    const res = await fetch(`/admin/delete?key=${encodeURIComponent(ADMIN_KEY)}`, {
+    const res = await fetch("/admin/delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ table, ids }),
@@ -289,7 +288,7 @@ clearAllBtn.addEventListener("click", async () => {
   clearAllStatus.className = "status-msg";
 
   try {
-    const res = await fetch(`/admin/clear-all?key=${encodeURIComponent(ADMIN_KEY)}`, {
+    const res = await fetch("/admin/clear-all", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm: confirmInput.value }),
