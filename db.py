@@ -7,6 +7,7 @@ import psycopg2.extras
 
 FIELDS = ["brand", "name", "size", "concentration", "gender", "condition"]
 
+
 def get_conn():
     """Get a Postgres connection using Render's DATABASE_URL env var.
     Render sometimes provides 'postgres://' which psycopg2 needs as 'postgresql://'."""
@@ -70,8 +71,6 @@ def init_db():
             # fixed, and chose to save. Includes the matched Airtable SKU (if found),
             # a full display name (from Airtable when matched, or built ourselves),
             # and a clickable link back to the original shelf photo.
-            # Uses "updated_at" (not "created_at") since this table may later support
-            # editing existing rows — updated_at is the date that will actually matter then.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS master_table (
                     id SERIAL PRIMARY KEY,
@@ -89,13 +88,10 @@ def init_db():
                 );
             """)
 
-            # Migration: add product_name to a table that was created before this column existed.
             cur.execute("""
                 ALTER TABLE master_table ADD COLUMN IF NOT EXISTS product_name TEXT;
             """)
 
-            # Migration: earlier deploys created this table with "created_at" instead.
-            # Rename it in place so existing data (and its dates) aren't lost.
             cur.execute("""
                 SELECT column_name FROM information_schema.columns
                 WHERE table_name = 'master_table' AND column_name = 'created_at';
@@ -105,7 +101,7 @@ def init_db():
                 cur.execute("ALTER TABLE master_table RENAME COLUMN created_at TO updated_at;")
 
             # User accounts for logging into the whole app. Passwords are stored as
-            # hashes (see auth.py), never plain text.
+            # hashes (see werkzeug.security in app.py), never plain text.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
@@ -168,11 +164,6 @@ def get_user_by_username(username):
 ALLOWED_TABLES = {"master_table", "recorded_items", "corrections"}
 
 
-# TODO-REMOVE-BEFORE-LIVE: delete_items() + clear_all() below back the "Delete selected"
-# and "Clear All Data" buttons on /admin/data. These are dev/testing-only tools for
-# wiping bad test data while building this app. Remove both functions (and their
-# routes in app.py, and their buttons/JS in templates/admin_data.html) before this
-# app is used with real, permanent shop data.
 def delete_items(table, ids):
     """Delete specific rows by id from one of the three known tables.
     `table` is checked against an allowlist — never build this from raw user input
@@ -186,7 +177,6 @@ def delete_items(table, ids):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # table name is validated against ALLOWED_TABLES above, so this is safe
             cur.execute(f"DELETE FROM {table} WHERE id = ANY(%s);", (ids,))
             deleted = cur.rowcount
         conn.commit()
@@ -227,9 +217,6 @@ def update_skus(updates):
 
 
 def clear_all():
-    # TODO-REMOVE-BEFORE-LIVE: backs the "Clear All Data" danger-zone button.
-    # Wipes every row in every table with no way to undo it. Remove this function
-    # (and its route in app.py, and the danger-zone UI in admin_data.html) before go-live.
     """Wipes every row from all three tables and resets id counters back to 1.
     Irreversible — the app layer must confirm intent before calling this."""
     print("[db] CLEARING ALL DATA from master_table, recorded_items, corrections...")
@@ -327,13 +314,6 @@ def save_master_items(shop_name, items, image_url):
     """
     Saves the FINAL, corrected items to master_table — called from /record, after the
     user has reviewed/fixed everything and selected which items to keep.
-
-    items: list of corrected item dicts, each already carrying 'sku' and 'product_name'
-           keys (set by looking up/building from Airtable — 'sku' may be None if no
-           match was found, but 'product_name' should always have a value, real or
-           fallback-built).
-    image_url: the Cloudinary URL of the original shelf photo, shared by every item
-               from this same extraction (may be None if photo upload wasn't configured).
     """
     print(f"[db] Saving {len(items)} item(s) to master_table for shop '{shop_name}'...")
     conn = get_conn()
@@ -374,9 +354,7 @@ def save_master_items(shop_name, items, image_url):
 def search_master_items(query, limit=100):
     """
     Search master_table for items where the search text appears anywhere in
-    the Brand, Name, Product Name, or SKU (partial match, case-insensitive) —
-    e.g. "initio" matches brand "Initio", "sauvage" matches name "Dior Sauvage",
-    and "gra100" matches SKU "GRA1003".
+    the Brand, Name, Product Name, or SKU (partial match, case-insensitive).
     """
     print(f"[db] Searching master_table for: {query!r}")
     conn = get_conn()
@@ -439,6 +417,31 @@ def get_all_corrections(limit=200):
                 LIMIT %s;
             """, (limit,))
             return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_distinct_shop_names(limit=200):
+    """
+    All shop names ever used, across both recorded_items (every extraction attempt)
+    and master_table (final saved items) — so the autocomplete list on the upload
+    page covers a shop even if nothing from it was ever actually saved yet.
+    Returns a plain list of strings, most recently used first.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT shop_name, MAX(seen_at) AS last_seen FROM (
+                    SELECT shop_name, created_at AS seen_at FROM recorded_items
+                    UNION ALL
+                    SELECT shop_name, updated_at AS seen_at FROM master_table
+                ) AS combined
+                GROUP BY shop_name
+                ORDER BY last_seen DESC
+                LIMIT %s;
+            """, (limit,))
+            return [row[0] for row in cur.fetchall()]
     finally:
         conn.close()
 

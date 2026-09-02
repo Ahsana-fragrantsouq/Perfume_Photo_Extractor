@@ -17,20 +17,14 @@ import photo_storage
 
 app = Flask(__name__)
 
-# Needed for login sessions. Set FLASK_SECRET_KEY in Render — without it, everyone
-# gets logged out whenever the app restarts (a new random key would be used each time).
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-insecure-key-change-in-render")
 
-# Anthropic client — reads ANTHROPIC_API_KEY from environment (set this in Render)
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 MODEL = "claude-sonnet-5"
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
-# Create tables on startup if they don't exist yet. If DATABASE_URL isn't set
-# (e.g. running locally without Postgres), the app still works for /extract —
-# only /record will fail until a database is connected.
 try:
     db.init_db()
 except Exception as e:
@@ -38,8 +32,6 @@ except Exception as e:
 
 
 def login_required(view_func):
-    """For pages the browser navigates to directly (GET requests that render HTML).
-    Redirects to /login (and back again afterward) if there's no active session."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
@@ -49,97 +41,12 @@ def login_required(view_func):
 
 
 def api_login_required(view_func):
-    """For AJAX/fetch-called endpoints. A redirect wouldn't make sense here (the
-    JS would just receive the login page's HTML and fail to parse it as JSON),
-    so this returns a plain 401 instead — the calling page's own login_required
-    already ensures nobody reaches this without a session in normal use; this
-    is the fallback for a session that expired mid-page-visit."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
             return jsonify({"error": "not_logged_in", "message": "Please log in again."}), 401
         return view_func(*args, **kwargs)
     return wrapped
-
-EXTRACTION_PROMPT_BASE = """You are looking at a photo of perfumes/fragrances taken inside a shop.
-
-Identify every distinct perfume/fragrance bottle or box you can see in the image.
-For each item, extract as much of the following as you can confidently determine from the image:
-
-- brand (e.g. "Dior", "Chanel")
-- name (e.g. "Sauvage", "Bleu de Chanel")
-- size (e.g. "100ml", "50ml") — include unit
-- concentration (e.g. "EDP", "EDT", "Parfum", "Cologne") — null if not visible/unclear
-- gender ("Men", "Women", "Unisex") — null if unclear
-- condition ("Sealed", "Tester", "Used", "Unknown") — best guess from packaging/visual cues
-- confidence — your confidence in this item's identification: "high", "medium", or "low"
-
-Respond with ONLY valid JSON, no markdown code fences, no explanation text, in this exact structure:
-
-{
-  "items": [
-    {
-      "brand": "...",
-      "name": "...",
-      "size": "...",
-      "concentration": "...",
-      "gender": "...",
-      "condition": "...",
-      "confidence": "..."
-    }
-  ]
-}
-
-If you cannot identify any items at all, return {"items": []}.
-Do not guess wildly — if a field is not determinable from the image, use null for that field rather than inventing a value.
-"""
-
-
-def build_extraction_prompt(shop_name):
-    """Base prompt + any past corrections for this shop, so Claude improves over time per-shop."""
-    try:
-        examples_text = db.build_correction_examples_text(shop_name)
-    except Exception as e:
-        print(f"[extract] Could not load past corrections: {e}")
-        examples_text = ""
-    return EXTRACTION_PROMPT_BASE + examples_text
-
-
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-MAX_DIMENSION = 1568  # Claude's recommended max edge length; larger images just get downsampled anyway
-MAX_BASE64_BYTES = 10 * 1024 * 1024  # Anthropic's hard limit for base64-encoded images
-
-
-def compress_image(image_bytes):
-    """Resize and compress an image so its base64 size stays under Claude's 10MB limit.
-    Returns (jpeg_bytes, media_type)."""
-    img = Image.open(io.BytesIO(image_bytes))
-    img = img.convert("RGB")  # normalize (handles PNG transparency, HEIC-via-Pillow, etc.)
-
-    if max(img.size) > MAX_DIMENSION:
-        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
-
-    quality = 85
-    while quality >= 40:
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=True)
-        data = buf.getvalue()
-        if len(data) * 4 / 3 < MAX_BASE64_BYTES:
-            return data, "image/jpeg"
-        quality -= 15
-
-    return data, "image/jpeg"
-
-
-def extract_json(text):
-    """Claude sometimes wraps JSON in code fences despite instructions — strip them defensively."""
-    text = text.strip()
-    text = re.sub(r"^```(json)?", "", text).strip()
-    text = re.sub(r"```$", "", text).strip()
-    return json.loads(text)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -176,6 +83,95 @@ def logout():
 @login_required
 def index():
     return render_template("index.html")
+
+
+EXTRACTION_PROMPT_BASE = """You are looking at a photo of perfumes/fragrances taken inside a shop.
+
+Identify every distinct perfume/fragrance bottle or box you can see in the image.
+For each item, extract as much of the following as you can confidently determine from the image:
+
+- brand (e.g. "Dior", "Chanel")
+- name (e.g. "Sauvage", "Bleu de Chanel")
+- size (e.g. "100ml", "50ml") — include unit
+- concentration (e.g. "EDP", "EDT", "Parfum", "Cologne") — null if not visible/unclear
+- gender ("Men", "Women", "Unisex") — null if unclear
+- condition ("Sealed", "Tester", "Used", "Unknown") — best guess from packaging/visual cues
+- confidence — your confidence in this item's identification: "high", "medium", or "low"
+
+Respond with ONLY valid JSON, no markdown code fences, no explanation text, in this exact structure:
+
+{
+  "items": [
+    {
+      "brand": "...",
+      "name": "...",
+      "size": "...",
+      "concentration": "...",
+      "gender": "...",
+      "condition": "...",
+      "confidence": "..."
+    }
+  ]
+}
+
+If you cannot identify any items at all, return {"items": []}.
+Do not guess wildly — if a field is not determinable from the image, use null for that field rather than inventing a value.
+"""
+
+
+def build_extraction_prompt(shop_name):
+    try:
+        examples_text = db.build_correction_examples_text(shop_name)
+    except Exception as e:
+        print(f"[extract] Could not load past corrections: {e}")
+        examples_text = ""
+    return EXTRACTION_PROMPT_BASE + examples_text
+
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+MAX_DIMENSION = 1568
+MAX_BASE64_BYTES = 10 * 1024 * 1024
+
+
+def compress_image(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes))
+    img = img.convert("RGB")
+
+    if max(img.size) > MAX_DIMENSION:
+        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
+
+    quality = 85
+    while quality >= 40:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        data = buf.getvalue()
+        if len(data) * 4 / 3 < MAX_BASE64_BYTES:
+            return data, "image/jpeg"
+        quality -= 15
+
+    return data, "image/jpeg"
+
+
+def extract_json(text):
+    text = text.strip()
+    text = re.sub(r"^```(json)?", "", text).strip()
+    text = re.sub(r"```$", "", text).strip()
+    return json.loads(text)
+
+
+@app.route("/api/shop-names")
+@api_login_required
+def api_shop_names():
+    """Powers the autocomplete dropdown on the upload page's Shop name field —
+    every shop name ever used, most recently used first."""
+    try:
+        names = db.get_distinct_shop_names()
+        return jsonify({"shop_names": names}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route("/extract", methods=["POST"])
@@ -342,9 +338,6 @@ def admin_data():
 @app.route("/admin/create-in-airtable", methods=["POST"])
 @api_login_required
 def admin_create_in_airtable():
-    """Creates a brand-new Airtable record for a master_table row that has no SKU,
-    auto-generating a SKU, and syncs it back to master_table on success.
-    body: {"id": 26, "brand": "...", "name": "...", "size": "...", "concentration": "...", "gender": "..."}"""
     data = request.get_json(silent=True) or {}
 
     try:

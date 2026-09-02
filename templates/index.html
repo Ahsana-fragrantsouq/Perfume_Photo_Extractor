@@ -50,7 +50,8 @@
 
 <form id="uploadForm">
   <label for="shop_name">Shop name</label>
-  <input type="text" id="shop_name" name="shop_name" placeholder="e.g. Al Haramain Dubai Mall" required>
+  <input type="text" id="shop_name" name="shop_name" list="shopNameOptions" placeholder="e.g. Al Haramain Dubai Mall" autocomplete="off" required>
+  <datalist id="shopNameOptions"></datalist>
 
   <label for="photo">Photo</label>
   <input type="file" id="photo" name="photo" accept="image/*" required>
@@ -74,6 +75,21 @@ let currentShopName = "";
 let currentImageUrl = null;   // filled in from /extract's response, sent back to /record
 let originalItems = [];   // exactly what Claude returned, never mutated
 let savedSnapshots = {};  // row index (string) -> the corrected values as of its last successful save; absent = never saved
+
+// Populate the Shop name autocomplete list with every shop used before
+(async function loadShopNames() {
+  try {
+    const res = await fetch("/api/shop-names");
+    if (!res.ok) return; // fail quietly — typing still works without the list
+    const data = await res.json();
+    const datalist = document.getElementById("shopNameOptions");
+    datalist.innerHTML = (data.shop_names || [])
+      .map(name => `<option value="${escapeHtml(name)}"></option>`)
+      .join("");
+  } catch (err) {
+    // Autocomplete is a convenience, not a requirement — say nothing if it fails
+  }
+})();
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
