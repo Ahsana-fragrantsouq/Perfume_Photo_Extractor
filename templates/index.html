@@ -23,6 +23,8 @@
   td input[type="text"]:focus { border-color: #111; background: #fff; outline: none; }
   td input[type="text"].edited { background: #fff8e1; }
   td.checkbox-cell { text-align: center; width: 30px; }
+  tr.row-saved { background: #f0fdf4; }
+  tr.row-saved td.checkbox-cell::after { content: "✓"; color: #1a7a1a; font-size: 11px; display: block; }
   .error { color: #b00020; margin-top: 14px; }
   .confidence-low { color: #b00020; }
   .confidence-medium { color: #a67c00; }
@@ -71,23 +73,7 @@ const submitBtn = document.getElementById("submitBtn");
 let currentShopName = "";
 let currentImageUrl = null;   // filled in from /extract's response, sent back to /record
 let originalItems = [];   // exactly what Claude returned, never mutated
-let lastSavedSelectionSignature = null;   // which row indices were selected in the last successful save
-
-function getCurrentSelectionSignature() {
-  const rows = document.querySelectorAll("#itemsTable tbody tr");
-  const selectedIndices = Array.from(rows)
-    .filter(row => row.querySelector(".row-select").checked)
-    .map(row => row.dataset.row);
-  return JSON.stringify(selectedIndices.sort());
-}
-
-function refreshSaveButtonState() {
-  const saveBtn = document.getElementById("saveBtn");
-  if (!saveBtn) return;
-  // Re-enable as soon as the checked selection differs from what was last saved —
-  // a different selection is a genuinely different save, not a duplicate.
-  saveBtn.disabled = getCurrentSelectionSignature() === lastSavedSelectionSignature;
-}
+let savedSnapshots = {};  // row index (string) -> the corrected values as of its last successful save; absent = never saved
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -116,7 +102,7 @@ form.addEventListener("submit", async (e) => {
     statusEl.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}". Review and correct below, then select which to record.`;
     originalItems = data.items;
     currentImageUrl = data.image_url ?? null;
-    lastSavedSelectionSignature = null; // fresh photo — nothing saved yet for this batch
+    savedSnapshots = {}; // fresh photo — nothing saved yet for this batch
 
     renderTable(data.items);
   } catch (err) {
@@ -149,7 +135,7 @@ function renderTable(items) {
   html += "</tbody></table>";
   html += `
     <div class="actions">
-      <button id="saveBtn" type="button">Save selected items</button>
+      <button id="saveBtn" type="button" disabled>Save selected items</button>
       <button id="selectAllBtn" type="button" class="secondary">Select all</button>
       <button id="deselectAllBtn" type="button" class="secondary">Deselect all</button>
     </div>
@@ -162,7 +148,12 @@ function renderTable(items) {
     const originalValue = input.value;
     input.addEventListener("input", () => {
       input.classList.toggle("edited", input.value !== originalValue);
+      refreshSaveButtonState();
     });
+  });
+
+  document.querySelectorAll(".row-select").forEach(cb => {
+    cb.addEventListener("change", refreshSaveButtonState);
   });
 
   document.getElementById("selectAllBtn").addEventListener("click", () => {
@@ -173,10 +164,34 @@ function renderTable(items) {
     document.querySelectorAll(".row-select").forEach(cb => cb.checked = false);
     refreshSaveButtonState();
   });
-  document.querySelectorAll(".row-select").forEach(cb => {
-    cb.addEventListener("change", refreshSaveButtonState);
-  });
   document.getElementById("saveBtn").addEventListener("click", saveSelectedItems);
+}
+
+// Current field values for a row, as an object keyed by field name
+function getRowCorrected(row) {
+  const corrected = {};
+  row.querySelectorAll(".field-input").forEach(input => {
+    corrected[input.dataset.field] = input.value.trim() || null;
+  });
+  return corrected;
+}
+
+// A row needs (re-)saving if it's checked AND either never saved before,
+// or its values have changed since the last time it was saved.
+function rowNeedsSaving(row) {
+  if (!row.querySelector(".row-select").checked) return false;
+  const i = row.dataset.row;
+  const saved = savedSnapshots[i];
+  if (!saved) return true;
+  return JSON.stringify(getRowCorrected(row)) !== JSON.stringify(saved);
+}
+
+function refreshSaveButtonState() {
+  const saveBtn = document.getElementById("saveBtn");
+  if (!saveBtn) return;
+  const rows = document.querySelectorAll("#itemsTable tbody tr");
+  const anyNeedsSaving = Array.from(rows).some(rowNeedsSaving);
+  saveBtn.disabled = !anyNeedsSaving;
 }
 
 async function saveSelectedItems() {
@@ -184,17 +199,21 @@ async function saveSelectedItems() {
   const saveBtn = document.getElementById("saveBtn");
   const rows = document.querySelectorAll("#itemsTable tbody tr");
 
-  const items = Array.from(rows).map(row => {
-    const i = parseInt(row.dataset.row, 10);
-    const corrected = {};
-    row.querySelectorAll(".field-input").forEach(input => {
-      corrected[input.dataset.field] = input.value.trim() || null;
-    });
-    const selected = row.querySelector(".row-select").checked;
-    return { original: originalItems[i], corrected, selected };
-  });
+  // Only rows that are checked AND (new or edited since their last save) get sent —
+  // this is what avoids re-saving duplicates for rows that are still checked but
+  // already saved unchanged.
+  const rowsToSave = Array.from(rows).filter(rowNeedsSaving);
 
-  const selectionSignatureBeingSaved = getCurrentSelectionSignature();
+  if (rowsToSave.length === 0) {
+    recordStatusEl.textContent = "Nothing new to save.";
+    recordStatusEl.className = "";
+    return;
+  }
+
+  const items = rowsToSave.map(row => {
+    const i = parseInt(row.dataset.row, 10);
+    return { original: originalItems[i], corrected: getRowCorrected(row), selected: true };
+  });
 
   saveBtn.disabled = true;
   recordStatusEl.textContent = "Saving...";
@@ -210,17 +229,22 @@ async function saveSelectedItems() {
 
     if (!res.ok) {
       recordStatusEl.innerHTML = `<div class="error">Error: ${data.error || "Unknown error"}</div>`;
-      saveBtn.disabled = false; // allow retry after a failure
+      refreshSaveButtonState(); // re-enable if there's still something to (re)try
       return;
     }
 
-    recordStatusEl.textContent = `Saved ${data.items_saved} item(s) to the database. Logged ${data.corrections_logged} correction(s) for future accuracy. Change the selection to save a different set.`;
-    // Remember exactly what was saved — the button stays disabled only for
-    // this same selection. Checking/unchecking anything re-enables it.
-    lastSavedSelectionSignature = selectionSignatureBeingSaved;
+    // Remember exactly what was saved for each of these rows, and mark them visually
+    rowsToSave.forEach(row => {
+      const i = row.dataset.row;
+      savedSnapshots[i] = getRowCorrected(row);
+      row.classList.add("row-saved");
+    });
+
+    recordStatusEl.textContent = `Saved ${data.items_saved} item(s) to the database. Logged ${data.corrections_logged} correction(s) for future accuracy. Select or edit more to save additional items.`;
+    refreshSaveButtonState(); // disables again unless something else still needs saving
   } catch (err) {
     recordStatusEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
-    saveBtn.disabled = false; // allow retry after a failure
+    refreshSaveButtonState();
   }
 }
 
