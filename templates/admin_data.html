@@ -33,12 +33,6 @@
 <h1>Saved Data</h1>
 <p style="margin-top:-10px;"><a href="{{ url_for('logout') }}">Log out</a></p>
 
-<!--
-DISABLED — Full Reset section. Backend routes (/admin/clear-all in app.py,
-clear_all() in db.py) are still there and working, just not exposed here.
-To bring this back: delete this comment wrapper and the matching one around
-the "Full reset" JS block further down.
-
 <div class="danger-zone">
   <h2>⚠ Full Reset</h2>
   <p>Deletes EVERYTHING in all three tables (Master Table, Recorded Items, Corrections Log) and cannot be undone. Type <strong>DELETE ALL</strong> below to enable the button.</p>
@@ -46,7 +40,6 @@ the "Full reset" JS block further down.
   <button id="clearAllBtn" disabled>Clear All Data</button>
   <div id="clearAllStatus" class="status-msg"></div>
 </div>
--->
 
 {% macro render_table(rows, columns, labels, table_name) %}
   {% if rows %}
@@ -90,14 +83,7 @@ the "Full reset" JS block further down.
     </tbody>
   </table>
   <div class="table-actions">
-    {#
-    DISABLED — Delete selected button. Backend route (/admin/delete in app.py,
-    delete_items() in db.py) and its JS handler (deleteSelected()) are still
-    there and working, just not exposed here. To bring this back: remove this
-    comment wrapper and the matching one around deleteSelected() further down.
-
     <button onclick="deleteSelected('{{ table_name }}')">Delete selected</button>
-    #}
     {% if table_name == 'master_table' %}
     <button onclick="updateSkus()">Update SKUs</button>
     {% endif %}
@@ -216,12 +202,6 @@ document.querySelectorAll(".select-all").forEach(selectAll => {
   });
 });
 
-
-// DISABLED — deleteSelected(). Pairs with the "Delete selected" button that's
-// commented out above, and the /admin/delete route in app.py (still active,
-// just unused from this page). To bring this back: remove this comment wrapper
-// and the matching one around the button further up.
-
 async function deleteSelected(table) {
   const checked = document.querySelectorAll(`.row-check[data-table="${table}"]:checked`);
   const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id, 10));
@@ -262,14 +242,6 @@ async function deleteSelected(table) {
     statusEl.className = "status-msg status-error";
   }
 }
-
-
-/*
-DISABLED — Full reset JS. Pairs with the danger-zone HTML commented out above,
-and the /admin/clear-all route in app.py (still active, just unused from this
-page). To bring this back: remove this comment wrapper and the matching one
-around the danger-zone HTML further up.
-*/
 
 const confirmInput = document.getElementById("confirmInput");
 const clearAllBtn = document.getElementById("clearAllBtn");
@@ -312,7 +284,6 @@ clearAllBtn.addEventListener("click", async () => {
     clearAllBtn.disabled = false;
   }
 });
-
 </script>
 
 </body>
