@@ -43,6 +43,13 @@
 
 {% macro render_table(rows, columns, labels, table_name) %}
   {% if rows %}
+  <div class="table-actions">
+    <button onclick="deleteSelected('{{ table_name }}')">Delete selected</button>
+    {% if table_name == 'master_table' %}
+    <button onclick="updateSkus()">Update SKUs</button>
+    {% endif %}
+    <div id="status-{{ table_name }}" class="status-msg"></div>
+  </div>
   <table id="table-{{ table_name }}">
     <thead>
       <tr>
@@ -82,13 +89,6 @@
       {% endfor %}
     </tbody>
   </table>
-  <div class="table-actions">
-    <button onclick="deleteSelected('{{ table_name }}')">Delete selected</button>
-    {% if table_name == 'master_table' %}
-    <button onclick="updateSkus()">Update SKUs</button>
-    {% endif %}
-    <div id="status-{{ table_name }}" class="status-msg"></div>
-  </div>
   {% else %}
   <p>No rows yet.</p>
   {% endif %}
