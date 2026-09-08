@@ -8,12 +8,20 @@ from functools import wraps
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from werkzeug.security import check_password_hash
 from PIL import Image
+import pillow_heif
 import anthropic
 import psycopg2
 
 import db
 import airtable_client
 import photo_storage
+
+# Registers HEIC/HEIF support with Pillow. Some phones (iPhones especially, some
+# Android too) capture photos internally as HEIC and occasionally export/share
+# them with a .jpg/.jpeg extension without actually converting the content —
+# without this, Image.open() fails with "cannot identify image file" on those,
+# regardless of what the file extension claims.
+pillow_heif.register_heif_opener()
 
 app = Flask(__name__)
 
@@ -209,7 +217,14 @@ def extract():
 
     try:
         image_bytes = photo.read()
-        compressed_bytes, media_type = compress_image(image_bytes)
+        try:
+            compressed_bytes, media_type = compress_image(image_bytes)
+        except Exception:
+            return jsonify({
+                "error": "This file couldn't be read as an image. This can happen if a phone saved it in "
+                         "a format that isn't quite standard JPEG/PNG despite the file extension — try "
+                         "re-saving or re-exporting the photo and uploading it again."
+            }), 400
         image_b64 = base64.standard_b64encode(compressed_bytes).decode("utf-8")
 
         message = client.messages.create(
