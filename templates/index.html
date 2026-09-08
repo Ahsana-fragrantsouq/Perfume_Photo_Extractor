@@ -39,8 +39,9 @@
   .confidence-high { color: #1a7a1a; }
   .actions { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
   .top-bar { position: relative; text-align: center; }
-  .top-bar a.search-link { position: absolute; top: 4px; right: 0; font-size: 14px; color: #111; text-decoration: none; border: 1px solid #111; padding: 6px 14px; border-radius: 6px; white-space: nowrap; }
-  .top-bar a.search-link:hover { background: #111; color: #fff; }
+  .top-bar .top-right-links { position: absolute; top: 4px; right: 0; display: flex; gap: 8px; }
+  .top-bar .top-right-links a { font-size: 14px; color: #111; text-decoration: none; border: 1px solid #111; padding: 6px 14px; border-radius: 6px; white-space: nowrap; }
+  .top-bar .top-right-links a:hover { background: #111; color: #fff; }
   .top-bar a.logout-link { position: absolute; top: 4px; left: 0; font-size: 13px; color: #666; text-decoration: none; }
   .top-bar a.logout-link:hover { text-decoration: underline; }
 </style>
@@ -53,7 +54,10 @@
     <h1>Perfume Photo Extractor</h1>
     <p class="sub">Upload a shelf photo and the shop name — items will be listed below. Fix anything wrong, then select which items to record.</p>
   </div>
-  <a href="/search" class="search-link">🔍 Search</a>
+  <div class="top-right-links">
+    <a href="/search">🔍 Search</a>
+    <a href="/admin/data">📋 Saved items</a>
+  </div>
 </div>
 
 <form id="uploadForm">
