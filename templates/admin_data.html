@@ -33,6 +33,12 @@
 <h1>Saved Data</h1>
 <p style="margin-top:-10px;"><a href="{{ url_for('logout') }}">Log out</a></p>
 
+<!--
+DISABLED — Full Reset section. Backend route (/admin/clear-all in app.py,
+clear_all() in db.py) is still there and working, just not exposed here.
+To bring this back: delete this comment wrapper and the matching one around
+the "Full reset" JS block further down.
+
 <div class="danger-zone">
   <h2>⚠ Full Reset</h2>
   <p>Deletes EVERYTHING in all three tables (Master Table, Recorded Items, Corrections Log) and cannot be undone. Type <strong>DELETE ALL</strong> below to enable the button.</p>
@@ -40,6 +46,7 @@
   <button id="clearAllBtn" disabled>Clear All Data</button>
   <div id="clearAllStatus" class="status-msg"></div>
 </div>
+-->
 
 {% macro render_table(rows, columns, labels, table_name) %}
   {% if rows %}
@@ -243,6 +250,12 @@ async function deleteSelected(table) {
   }
 }
 
+/*
+DISABLED — Full reset JS. Pairs with the danger-zone HTML commented out above,
+and the /admin/clear-all route in app.py (still active, just unused from this
+page). To bring this back: remove this comment wrapper and the matching one
+around the danger-zone HTML further up.
+
 const confirmInput = document.getElementById("confirmInput");
 const clearAllBtn = document.getElementById("clearAllBtn");
 const clearAllStatus = document.getElementById("clearAllStatus");
@@ -284,6 +297,7 @@ clearAllBtn.addEventListener("click", async () => {
     clearAllBtn.disabled = false;
   }
 });
+*/
 </script>
 
 </body>
