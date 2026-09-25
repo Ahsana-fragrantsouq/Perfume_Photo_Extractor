@@ -565,6 +565,10 @@ def mobile_data():
         recorded_items=_plain_rows(recorded_items),
         corrections=_plain_rows(corrections),
     )
+# icon
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(app.static_folder, "icons/icon-192.png", mimetype="image/png")
 
 @app.route('/sw.js')
 def service_worker():
