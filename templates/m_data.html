@@ -111,7 +111,6 @@
   <footer>
     <div id="msg" class="msg" role="status"></div>
     <div class="foot-row">
-      <button id="selectAllBtn" class="ghost" type="button">Select all shown</button>
       <button id="deleteBtn" class="ghost danger" type="button" disabled>Delete selected</button>
     </div>
     <div class="foot-row" id="skuRow">
@@ -292,15 +291,6 @@ $('list').addEventListener('change', (e) => {
   e.target.closest('.card').classList.toggle('picked', e.target.checked);
   log(`${tab} #${id} ${e.target.checked ? 'selected' : 'unselected'}`);
   refreshButtons();
-});
-
-$('selectAllBtn').addEventListener('click', () => {
-  const rows = visibleRows();
-  const allPicked = rows.length && rows.every((r) => picked[tab].has(r.id));
-  rows.forEach((r) => (allPicked ? picked[tab].delete(r.id) : picked[tab].add(r.id)));
-  log(`${allPicked ? 'Unselected' : 'Selected'} all ${rows.length} shown in ${tab}`);
-  render();
-  $('selectAllBtn').textContent = allPicked ? 'Select all shown' : 'Unselect all';
 });
 
 /* ------------------------- SKU typing ------------------------- */

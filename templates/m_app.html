@@ -428,11 +428,9 @@ $('fileInput').addEventListener('change', async (e) => {
 /* ------------------------- Shop names ------------------------- */
 
 async function loadShops() {
-  const input = $('shopInput');
-  if (!input.value) {
-    try { input.value = localStorage.getItem('lastShop') || ''; } catch (_) {}
-    if (input.value) log('shops', `Pre-filled last used shop: "${input.value}"`);
-  }
+  // Shop name always starts empty - you pick or type it for every photo
+  $('shopInput').value = '';
+  log('shops', 'Shop name cleared for new photo');
   try {
     const res = await fetch('/api/shop-names');
     if (res.status === 401) return goToLogin('shops');
@@ -462,8 +460,6 @@ $('extractBtn').addEventListener('click', async () => {
   if (!shop) { setMsg('Enter a shop name first.', 'error'); $('shopInput').focus(); return; }
   if (!photoBlob) { setMsg('No photo yet. Tap Retake.', 'error'); return; }
   if (!navigator.onLine) { setMsg('No internet connection. Connect and tap Extract items again.', 'error'); return; }
-
-  try { localStorage.setItem('lastShop', shop); } catch (_) {}
 
   const form = new FormData();
   form.append('photo', photoBlob, 'photo.jpg');   // server needs a .jpg name
