@@ -537,8 +537,9 @@ function goToLogin(tag) {
    - each item keeps Claude's ORIGINAL values (never changed) + your CORRECTED values
    - Save sends only ticked items that are new, or edited since their last save
      -> /record logs corrections and saves to Master, same as the laptop
-   Differences for the phone: cards instead of a table, and items start ticked
-   except low-confidence ones, which start unticked so they get checked first.
+   Difference for the phone: cards instead of a table. Like the laptop,
+   every item starts unticked - you tick the ones you want to save.
+   Low-confidence items get a red border so you check them first.
 ------------------------------------------------------------------------------------- */
 
 const FIELDS = ['brand', 'name', 'size', 'concentration', 'gender', 'condition'];
@@ -569,11 +570,11 @@ function showW3(data) {
     current: items.map((it) => {                            // what you see / edit
       const c = {}; FIELDS.forEach((f) => { c[f] = it[f] ?? ''; }); return c;
     }),
-    ticked: items.map((it) => (it.confidence || '').toLowerCase() !== 'low'),
+    ticked: items.map(() => false),                         // all unticked at start
     saved: {},
   };
-  const low = review.ticked.filter((t) => !t).length;
-  log('review', `Show window 3 | ${items.length} item(s) | ${low} low-confidence left unticked`);
+  const low = items.filter((it) => (it.confidence || '').toLowerCase() === 'low').length;
+  log('review', `Show window 3 | ${items.length} item(s) | all unticked | ${low} low-confidence`);
 
   $('w3Title').innerHTML = `${esc(review.shopName)} <span class="count">· ${items.length} item${items.length === 1 ? '' : 's'}</span>`;
   setW3Msg('');
