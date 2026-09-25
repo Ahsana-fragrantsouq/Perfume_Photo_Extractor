@@ -13,8 +13,6 @@
   <meta name="apple-mobile-web-app-title" content="FS Extractor">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
-  <!-- camera -->
-   
   <style>
     :root {
       --black: #000;
@@ -100,6 +98,49 @@
     .primary:active { background: var(--gold-press); }
     .primary:disabled { opacity: .5; }
 
+    /* ---------- Window 3: extracted items review ---------- */
+    #w3 { background: var(--panel); }
+    .w3-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 10px;
+    }
+    .w3-head h1 { font-size: 17px; font-weight: 600; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .w3-head .count { color: var(--muted); font-weight: 400; }
+    .icon-btn { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--field); flex-shrink: 0; }
+    .icon-btn svg { width: 22px; height: 22px; }
+    .list { flex: 1; overflow-y: auto; padding: 4px 16px 16px; -webkit-overflow-scrolling: touch; }
+    .empty { color: var(--muted); text-align: center; padding: 48px 16px; line-height: 1.6; }
+
+    .item { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; background: #221f1b; }
+    .item.low { border-color: #6b3a31; }
+    .item.saved { border-color: #3f5c45; }
+    .item-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px; }
+    .tick { width: 26px; height: 26px; flex-shrink: 0; accent-color: var(--gold); margin: 1px 0 0; }
+    .item-main { flex: 1; min-width: 0; text-align: left; padding: 0; }
+    .item-title { font-size: 15px; font-weight: 600; line-height: 1.35; }
+    .item-sub { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+    .item-tags { display: flex; gap: 10px; margin-top: 6px; font-size: 12px; }
+    .conf-high { color: var(--green); }
+    .conf-medium { color: #d9b56b; }
+    .conf-low { color: var(--red); }
+    .tag-saved { color: var(--green); }
+    .tag-edited { color: #d9b56b; }
+
+    .editor { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 12px 14px 50px; }
+    .editor .full { grid-column: 1 / -1; }
+    .editor label { margin-bottom: 4px; font-size: 12px; }
+    .editor input { height: 42px; font-size: 15px; }
+    .editor input.changed { border-color: var(--gold); }
+
+    .w3-foot {
+      padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+      border-top: 1px solid var(--line); background: var(--panel);
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .foot-row { display: flex; gap: 10px; }
+    .ghost { flex: 1; height: 42px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
+    .w3-foot .msg { min-height: 0; }
+
     /* ---------- Busy overlay while extracting ---------- */
     #busy {
       position: fixed; inset: 0; background: rgba(0,0,0,.78);
@@ -165,6 +206,32 @@
     <button id="extractBtn" class="primary" type="button">Extract items</button>
   </section>
 
+  <!-- ===================== WINDOW 3: EXTRACTED ITEMS ===================== -->
+  <section id="w3" class="screen" aria-label="Extracted items" hidden>
+    <header class="w3-head">
+      <h1 id="w3Title">Items</h1>
+      <button id="nextPhotoBtn" class="icon-btn" type="button" aria-label="Take next photo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      </button>
+    </header>
+
+    <div id="itemList" class="list"></div>
+
+    <footer class="w3-foot">
+      <div id="w3Msg" class="msg" role="status"></div>
+      <div class="foot-row">
+        <button id="selectAllBtn" class="ghost" type="button">Select all</button>
+        <button id="deselectAllBtn" class="ghost" type="button">Deselect all</button>
+      </div>
+      <button id="saveBtn" class="primary" type="button" disabled>Save selected</button>
+    </footer>
+  </section>
+
+  <!-- Suggestions for the edit boxes (filled from /api/field-options) -->
+  <datalist id="concentrationOptions"></datalist>
+  <datalist id="genderOptions"></datalist>
+  <datalist id="conditionOptions"></datalist>
+
   <!-- Busy overlay shown while Claude reads the photo -->
   <div id="busy" hidden role="alert" aria-live="assertive">
     <div class="spinner"></div>
@@ -173,13 +240,14 @@
 
 <script>
 /* =================================================================
-   FS Extractor — phone app (Step 2: camera + shop name + extract)
+   FS Extractor — phone app (windows 1-3: camera, shop name, review)
    Every log line starts with a tag so you can filter the console:
      [m]       general / screen changes
      [camera]  live camera
      [photo]   taking / picking / shrinking photos
      [shops]   shop name list
      [extract] sending the photo to /extract
+     [review]  window 3: ticking, editing, saving items via /record
      [PWA]     service worker / install
    ================================================================= */
 
@@ -220,8 +288,20 @@ function showW2(blob, source) {
   loadShops();
 }
 
-// Phone Back button on window 2 -> go back to camera instead of closing the app
+// Phone Back button on window 2 or 3 -> go back to camera instead of closing the app
 window.addEventListener('popstate', () => {
+  if (!$('w3').hidden) {
+    const unsaved = countNeedsSaving();
+    if (unsaved > 0 && !confirm(`${unsaved} ticked item(s) are not saved yet. Leave without saving?`)) {
+      log('review', `Stayed on review screen (${unsaved} unsaved)`);
+      history.pushState({ screen: 'w3' }, '');   // undo the Back
+      return;
+    }
+    log('m', `Leaving review screen -> camera (${unsaved} unsaved left behind)`);
+    $('w3').hidden = true;
+    showW1();
+    return;
+  }
   if (!$('w2').hidden) { log('m', 'Back button pressed -> camera'); showW1(); }
 });
 
@@ -411,10 +491,10 @@ $('extractBtn').addEventListener('click', async () => {
     log('extract', `Done in ${secs}s | ${data.item_count} item(s) | photo: ${data.image_url}`);
     console.table(data.items);
 
-    // Keep the result for the review screen (Step 3)
+    // Keep a copy on the phone in case it's needed later (e.g. offline queue)
     try { sessionStorage.setItem('lastExtract', JSON.stringify(data)); } catch (_) {}
 
-    setMsg(`Found ${data.item_count} item(s) for ${data.shop_name}. The review screen comes in Step 3.`, 'ok');
+    showW3(data);
   } catch (err) {
     warn('extract', 'Error:', err.message);
     setMsg(err.message.includes('Failed to fetch')
@@ -450,6 +530,243 @@ function releaseScreen() {
 function goToLogin(tag) {
   warn(tag, 'Not logged in -> going to login page');
   location.href = LOGIN_URL;
+}
+
+/* ------------------------- Window 3: review extracted items -------------------------
+   Works exactly like the laptop results table:
+   - each item keeps Claude's ORIGINAL values (never changed) + your CORRECTED values
+   - Save sends only ticked items that are new, or edited since their last save
+     -> /record logs corrections and saves to Master, same as the laptop
+   Differences for the phone: cards instead of a table, and items start ticked
+   except low-confidence ones, which start unticked so they get checked first.
+------------------------------------------------------------------------------------- */
+
+const FIELDS = ['brand', 'name', 'size', 'concentration', 'gender', 'condition'];
+const FIELD_LABELS = { brand: 'Brand', name: 'Name', size: 'Size', concentration: 'Concentration', gender: 'Gender', condition: 'Condition' };
+const AUTOCOMPLETE_FIELDS = ['concentration', 'gender', 'condition'];
+
+let review = null;   // { shopName, imageUrl, original: [...], current: [...], ticked: [...], saved: {index: snapshot} }
+
+// Load Concentration / Gender / Condition suggestions once
+(async function loadFieldOptions() {
+  try {
+    const res = await fetch('/api/field-options');
+    if (!res.ok) { warn('review', `Field options not loaded (status ${res.status})`); return; }
+    const opts = await res.json();
+    AUTOCOMPLETE_FIELDS.forEach((f) => {
+      $(`${f}Options`).innerHTML = (opts[f] || []).map((v) => `<option value="${esc(v)}"></option>`).join('');
+    });
+    log('review', 'Field suggestions loaded:', AUTOCOMPLETE_FIELDS.map((f) => `${f} ${(opts[f] || []).length}`).join(', '));
+  } catch (err) { warn('review', 'Field suggestions failed (typing still works):', err.message); }
+})();
+
+function showW3(data) {
+  const items = data.items || [];
+  review = {
+    shopName: data.shop_name,
+    imageUrl: data.image_url ?? null,
+    original: items,                                        // exactly what Claude returned
+    current: items.map((it) => {                            // what you see / edit
+      const c = {}; FIELDS.forEach((f) => { c[f] = it[f] ?? ''; }); return c;
+    }),
+    ticked: items.map((it) => (it.confidence || '').toLowerCase() !== 'low'),
+    saved: {},
+  };
+  const low = review.ticked.filter((t) => !t).length;
+  log('review', `Show window 3 | ${items.length} item(s) | ${low} low-confidence left unticked`);
+
+  $('w3Title').innerHTML = `${esc(review.shopName)} <span class="count">· ${items.length} item${items.length === 1 ? '' : 's'}</span>`;
+  setW3Msg('');
+  renderItems();
+
+  $('w2').hidden = true;
+  $('w3').hidden = false;
+  history.replaceState({ screen: 'w3' }, '');   // Back from here goes to camera
+}
+
+function renderItems() {
+  const list = $('itemList');
+  if (!review.original.length) {
+    list.innerHTML = '<div class="empty">No items were found in this photo.<br>Try a closer, sharper photo of the shelf.</div>';
+    refreshSaveButton();
+    return;
+  }
+  list.innerHTML = review.original.map((orig, i) => {
+    const conf = (orig.confidence || '').toLowerCase();
+    return `
+      <div class="item${conf === 'low' ? ' low' : ''}" id="item-${i}">
+        <div class="item-row">
+          <input type="checkbox" class="tick" data-i="${i}" ${review.ticked[i] ? 'checked' : ''} aria-label="Select item ${i + 1}">
+          <button type="button" class="item-main" data-i="${i}" aria-expanded="false">
+            <div class="item-title" id="title-${i}"></div>
+            <div class="item-sub" id="sub-${i}"></div>
+            <div class="item-tags">
+              <span class="conf-${esc(conf)}">${conf ? esc(conf) + (conf === 'low' ? ' · check this' : '') : 'no confidence'}</span>
+              <span id="state-${i}"></span>
+            </div>
+          </button>
+        </div>
+        <div class="editor" id="editor-${i}" hidden>
+          ${FIELDS.map((f) => `
+            <div class="${f === 'name' ? 'full' : ''}">
+              <label for="f-${i}-${f}">${FIELD_LABELS[f]}</label>
+              <input type="text" id="f-${i}-${f}" data-i="${i}" data-f="${f}" value="${esc(review.current[i][f])}"
+                     autocomplete="off"${AUTOCOMPLETE_FIELDS.includes(f) ? ` list="${f}Options"` : ''}>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+  review.original.forEach((_, i) => updateCard(i));
+  refreshSaveButton();
+}
+
+// Refresh the summary text and Saved / Edited tags of one card
+function updateCard(i) {
+  const c = review.current[i];
+  $(`title-${i}`).textContent = [c.brand, c.name].filter(Boolean).join(' · ') || 'Unnamed item';
+  $(`sub-${i}`).textContent = [c.size, c.concentration, c.gender, c.condition].filter(Boolean).join(' · ') || 'No details';
+
+  const saved = review.saved[i];
+  const edited = FIELDS.some((f) => (c[f] || '') !== (review.original[i][f] ?? ''));
+  const card = $(`item-${i}`), state = $(`state-${i}`);
+  if (saved && !differsFromSaved(i)) {
+    card.classList.add('saved'); state.className = 'tag-saved'; state.textContent = '✓ Saved';
+  } else if (saved) {
+    card.classList.remove('saved'); state.className = 'tag-edited'; state.textContent = 'Edited · save again';
+  } else {
+    card.classList.remove('saved'); state.className = edited ? 'tag-edited' : ''; state.textContent = edited ? 'Edited' : '';
+  }
+}
+
+// Values as /record expects them: trimmed, empty -> null (same as the laptop page)
+function corrected(i) {
+  const out = {};
+  FIELDS.forEach((f) => { out[f] = (review.current[i][f] || '').trim() || null; });
+  return out;
+}
+function differsFromSaved(i) {
+  return JSON.stringify(corrected(i)) !== JSON.stringify(review.saved[i]);
+}
+// Ticked AND (never saved OR edited since last save) — avoids saving duplicates
+function needsSaving(i) {
+  return review.ticked[i] && (!review.saved[i] || differsFromSaved(i));
+}
+function countNeedsSaving() {
+  return review ? review.original.filter((_, i) => needsSaving(i)).length : 0;
+}
+
+function refreshSaveButton() {
+  const n = countNeedsSaving();
+  $('saveBtn').disabled = n === 0;
+  $('saveBtn').textContent = n ? `Save selected (${n})` : 'Save selected';
+}
+
+function setW3Msg(text, type) {
+  const el = $('w3Msg');
+  el.textContent = text;
+  el.className = 'msg' + (type ? ' ' + type : '');
+}
+
+// Tick / untick
+$('itemList').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('tick')) return;
+  const i = +e.target.dataset.i;
+  review.ticked[i] = e.target.checked;
+  log('review', `Item ${i + 1} ${e.target.checked ? 'ticked' : 'unticked'}`);
+  refreshSaveButton();
+});
+
+// Tap a card -> open / close its edit boxes
+$('itemList').addEventListener('click', (e) => {
+  const btn = e.target.closest('.item-main');
+  if (!btn) return;
+  const i = +btn.dataset.i;
+  const ed = $(`editor-${i}`);
+  ed.hidden = !ed.hidden;
+  btn.setAttribute('aria-expanded', String(!ed.hidden));
+  log('review', `Item ${i + 1} editor ${ed.hidden ? 'closed' : 'opened'}`);
+});
+
+// Typing in an edit box
+$('itemList').addEventListener('input', (e) => {
+  const inp = e.target;
+  if (!inp.dataset.f) return;
+  const i = +inp.dataset.i, f = inp.dataset.f;
+  review.current[i][f] = inp.value;
+  inp.classList.toggle('changed', inp.value !== (review.original[i][f] ?? ''));
+  updateCard(i);
+  refreshSaveButton();
+});
+$('itemList').addEventListener('focusout', (e) => {
+  const inp = e.target;
+  if (inp.dataset && inp.dataset.f) {
+    const i = +inp.dataset.i, f = inp.dataset.f;
+    if (inp.value !== (review.original[i][f] ?? '')) {
+      log('review', `Item ${i + 1} ${f}: "${review.original[i][f] ?? ''}" -> "${inp.value}"`);
+    }
+  }
+});
+
+$('selectAllBtn').addEventListener('click', () => {
+  review.ticked = review.ticked.map(() => true);
+  document.querySelectorAll('.tick').forEach((cb) => { cb.checked = true; });
+  log('review', 'Select all');
+  refreshSaveButton();
+});
+$('deselectAllBtn').addEventListener('click', () => {
+  review.ticked = review.ticked.map(() => false);
+  document.querySelectorAll('.tick').forEach((cb) => { cb.checked = false; });
+  log('review', 'Deselect all');
+  refreshSaveButton();
+});
+
+// Camera icon -> next photo (Back handler warns about unsaved items)
+$('nextPhotoBtn').addEventListener('click', () => {
+  log('review', 'Next photo pressed');
+  history.back();
+});
+
+// Save -> /record (same request format as the laptop page)
+$('saveBtn').addEventListener('click', async () => {
+  const indexes = review.original.map((_, i) => i).filter(needsSaving);
+  if (!indexes.length) { setW3Msg('Nothing new to save.'); return; }
+  if (!navigator.onLine) { setW3Msg('No internet connection. Connect and tap Save again.', 'error'); return; }
+
+  const items = indexes.map((i) => ({ original: review.original[i], corrected: corrected(i), selected: true }));
+  log('review', `Saving ${items.length} item(s) to /record | shop "${review.shopName}"`, items);
+
+  $('saveBtn').disabled = true;
+  $('saveBtn').textContent = 'Saving…';
+  setW3Msg('');
+
+  try {
+    const res = await fetch('/record', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shop_name: review.shopName, image_url: review.imageUrl, items }),
+    });
+    if (res.status === 401) return goToLogin('review');
+    const data = await res.json();
+
+    if (!res.ok) {
+      warn('review', `Save failed | status ${res.status} |`, data);
+      setW3Msg(data.error || `Save failed (status ${res.status}).`, 'error');
+      return;
+    }
+
+    indexes.forEach((i) => { review.saved[i] = corrected(i); updateCard(i); });
+    log('review', `Saved ${data.items_saved} item(s) | ${data.corrections_logged} correction(s) logged`);
+    setW3Msg(`Saved ${data.items_saved} item(s). ${data.corrections_logged} correction(s) logged.`, 'ok');
+  } catch (err) {
+    warn('review', 'Save error:', err.message);
+    setW3Msg('Connection lost while saving. Check your internet and tap Save again.', 'error');
+  } finally {
+    refreshSaveButton();
+  }
+});
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 /* ------------------------- Service worker (install support) ------------------------- */
