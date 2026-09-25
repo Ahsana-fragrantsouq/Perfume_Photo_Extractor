@@ -520,6 +520,16 @@ def api_search():
 def health():
     return jsonify({"status": "ok"}), 200
 
+# ---------------------------------------------------------------
+# PHONE APP: camera -> shop name -> extract (windows 1 and 2).
+# Uses the same /extract and /api/shop-names as the laptop page.
+# ---------------------------------------------------------------
+@app.route("/m/")
+@login_required
+def mobile_app():
+    print(f"[m] Phone app opened by '{session.get('username')}' (camera screen)", flush=True)
+    return render_template("m_app.html")
+
 @app.route('/sw.js')
 def service_worker():
     path = os.path.join(app.static_folder, 'sw.js')

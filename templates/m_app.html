@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>FS Extractor</title>
+
+  <!-- PWA: app name, icon, full-screen launch -->
+  <meta name="theme-color" content="#000000">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="FS Extractor">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- camera -->
+   
+  <style>
+    :root {
+      --black: #000;
+      --panel: #1c1a17;
+      --field: #2a2723;
+      --line: #3d3934;
+      --text: #f3efe8;
+      --muted: #a39d93;
+      --gold: #c9a45c;
+      --gold-press: #b38f4a;
+      --red: #e0806f;
+      --green: #8fc79a;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--black);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 16px;
+      overflow: hidden;
+    }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+
+    .screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+    /* ---------- Window 1: camera ---------- */
+    #w1 { background: var(--black); }
+    .viewfinder { position: relative; flex: 1; overflow: hidden; }
+    .viewfinder video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .cam-msg {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 12px;
+      padding: 32px; text-align: center; color: var(--muted); line-height: 1.5;
+    }
+    .cam-msg button { color: var(--gold); text-decoration: underline; }
+
+    .shutter-row { display: flex; justify-content: center; padding: 14px 0 12px; }
+    .shutter {
+      width: 72px; height: 72px; border-radius: 50%;
+      border: 4px solid var(--text); padding: 5px;
+    }
+    .shutter span { display: block; width: 100%; height: 100%; border-radius: 50%; background: var(--text); transition: transform .1s; }
+    .shutter:active span { transform: scale(.88); }
+    .shutter:disabled { opacity: .35; }
+
+    .bar {
+      display: flex; justify-content: space-around; align-items: center;
+      padding: 10px 8px calc(12px + env(safe-area-inset-bottom, 0px));
+      background: var(--panel);
+    }
+    .bar button {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      min-width: 72px; padding: 6px; font-size: 12px; color: var(--text);
+    }
+    .bar svg { width: 24px; height: 24px; }
+
+    /* ---------- Window 2: shop name + extract ---------- */
+    #w2 {
+      background: var(--panel);
+      padding: calc(12px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
+      gap: 16px;
+    }
+    .back { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 15px; padding: 6px 0; align-self: flex-start; }
+    .back svg { width: 20px; height: 20px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"] {
+      width: 100%; height: 48px; padding: 0 14px;
+      background: var(--field); color: var(--text);
+      border: 1px solid var(--line); border-radius: 10px; font-size: 16px;
+    }
+    .preview { flex: 1; min-height: 0; border-radius: 12px; background: var(--black); overflow: hidden; }
+    .preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .msg { font-size: 14px; line-height: 1.5; min-height: 1.5em; }
+    .msg.error { color: var(--red); }
+    .msg.ok { color: var(--green); }
+    .primary {
+      height: 54px; border-radius: 12px; background: var(--gold); color: #1c1a17;
+      font-size: 17px; font-weight: 600;
+    }
+    .primary:active { background: var(--gold-press); }
+    .primary:disabled { opacity: .5; }
+
+    /* ---------- Busy overlay while extracting ---------- */
+    #busy {
+      position: fixed; inset: 0; background: rgba(0,0,0,.78);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+      text-align: center; padding: 32px; z-index: 10;
+    }
+    .spinner { width: 44px; height: 44px; border: 3px solid var(--line); border-top-color: var(--gold); border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #busy p { margin: 0; color: var(--muted); line-height: 1.5; }
+    #busy strong { color: var(--text); font-weight: 600; display: block; font-size: 17px; }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+  </style>
+</head>
+<body>
+
+  <!-- ===================== WINDOW 1: CAMERA ===================== -->
+  <section id="w1" class="screen" aria-label="Camera">
+    <div class="viewfinder">
+      <video id="video" playsinline muted autoplay></video>
+      <div id="camMsg" class="cam-msg">Starting camera…</div>
+    </div>
+
+    <div class="shutter-row">
+      <button id="shutterBtn" class="shutter" aria-label="Take photo" disabled><span></span></button>
+    </div>
+
+    <nav class="bar">
+      <button id="galleryBtn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>
+        Gallery
+      </button>
+      <button type="button" onclick="goTo('/search')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        Search
+      </button>
+      <button type="button" onclick="goTo('/admin/data')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+        Saved
+      </button>
+    </nav>
+
+    <!-- Hidden file picker used by the Gallery button (gallery + files/documents) -->
+    <input id="fileInput" type="file" accept="image/*" hidden>
+  </section>
+
+  <!-- ===================== WINDOW 2: SHOP NAME + EXTRACT ===================== -->
+  <section id="w2" class="screen" aria-label="Shop name and photo" hidden>
+    <button id="retakeBtn" class="back" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      Retake
+    </button>
+
+    <div>
+      <label for="shopInput">Shop name</label>
+      <input id="shopInput" type="text" list="shopList" placeholder="Pick a shop or type a new one" autocomplete="off">
+      <datalist id="shopList"></datalist>
+    </div>
+
+    <div class="preview"><img id="previewImg" alt="Photo to extract from"></div>
+
+    <div id="w2Msg" class="msg" role="status"></div>
+
+    <button id="extractBtn" class="primary" type="button">Extract items</button>
+  </section>
+
+  <!-- Busy overlay shown while Claude reads the photo -->
+  <div id="busy" hidden role="alert" aria-live="assertive">
+    <div class="spinner"></div>
+    <p><strong>Extracting items…</strong>This can take up to a minute for a full shelf. Keep the app open.</p>
+  </div>
+
+<script>
+/* =================================================================
+   FS Extractor — phone app (Step 2: camera + shop name + extract)
+   Every log line starts with a tag so you can filter the console:
+     [m]       general / screen changes
+     [camera]  live camera
+     [photo]   taking / picking / shrinking photos
+     [shops]   shop name list
+     [extract] sending the photo to /extract
+     [PWA]     service worker / install
+   ================================================================= */
+
+const MAX_SIDE = 1568;      // same limit the server uses; Claude reads this size best
+const JPEG_QUALITY = 0.85;
+const LOGIN_URL = '/login?next=/m/';
+
+const $ = (id) => document.getElementById(id);
+const log = (tag, ...a) => console.log(`[${tag}]`, ...a);
+const warn = (tag, ...a) => console.warn(`[${tag}]`, ...a);
+
+let stream = null;          // live camera stream
+let photoBlob = null;       // the photo waiting to be extracted
+let previewUrl = null;      // temporary URL for the preview image
+let wakeLock = null;        // keeps the screen on while extracting
+
+/* ------------------------- Screens ------------------------- */
+
+function showW1() {
+  log('m', 'Show window 1 (camera)');
+  $('w2').hidden = true;
+  $('w1').hidden = false;
+  startCamera();
+}
+
+function showW2(blob, source) {
+  log('m', `Show window 2 (shop name) | photo from ${source} | ${(blob.size / 1024).toFixed(0)} KB`);
+  photoBlob = blob;
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(blob);
+  $('previewImg').src = previewUrl;
+  setMsg('');
+  $('extractBtn').disabled = false;
+  stopCamera();                       // save battery while on window 2
+  $('w1').hidden = true;
+  $('w2').hidden = false;
+  history.pushState({ screen: 'w2' }, '');   // phone Back button returns to camera
+  loadShops();
+}
+
+// Phone Back button on window 2 -> go back to camera instead of closing the app
+window.addEventListener('popstate', () => {
+  if (!$('w2').hidden) { log('m', 'Back button pressed -> camera'); showW1(); }
+});
+
+function goTo(url) {
+  log('m', `Opening ${url}`);
+  stopCamera();
+  location.href = url;
+}
+
+function setMsg(text, type) {
+  const el = $('w2Msg');
+  el.textContent = text;
+  el.className = 'msg' + (type ? ' ' + type : '');
+}
+
+/* ------------------------- Camera ------------------------- */
+
+async function startCamera() {
+  if (stream) { log('camera', 'Already running'); return; }
+  const msg = $('camMsg');
+  msg.hidden = false;
+  msg.textContent = 'Starting camera…';
+  $('shutterBtn').disabled = true;
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    warn('camera', 'This browser has no camera access');
+    msg.innerHTML = 'This browser can’t open the camera.<br>Use <button type="button" onclick="$(\'fileInput\').click()">Gallery</button> instead.';
+    return;
+  }
+
+  try {
+    log('camera', 'Requesting back camera…');
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    });
+    const video = $('video');
+    video.srcObject = stream;
+    await video.play();
+    const s = stream.getVideoTracks()[0].getSettings();
+    log('camera', `Running | ${s.width}x${s.height} | facing: ${s.facingMode || 'unknown'}`);
+    msg.hidden = true;
+    $('shutterBtn').disabled = false;
+  } catch (err) {
+    warn('camera', 'Could not start:', err.name, err.message);
+    stream = null;
+    const denied = err.name === 'NotAllowedError';
+    msg.innerHTML = denied
+      ? 'Camera permission is off.<br>Allow camera access for this app in your phone settings, or use <button type="button" onclick="$(\'fileInput\').click()">Gallery</button>.'
+      : 'Camera couldn’t start.<br><button type="button" onclick="startCamera()">Try again</button> or use <button type="button" onclick="$(\'fileInput\').click()">Gallery</button>.';
+  }
+}
+
+function stopCamera() {
+  if (!stream) return;
+  stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  $('video').srcObject = null;
+  log('camera', 'Stopped');
+}
+
+// Stop the camera when the app goes to the background, restart when it comes back
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    log('camera', 'App hidden -> stopping camera');
+    stopCamera();
+  } else if (!$('w1').hidden) {
+    log('camera', 'App visible again -> restarting camera');
+    startCamera();
+  }
+});
+
+/* ------------------------- Taking / picking photos ------------------------- */
+
+// Shrink a picture so its longest side is at most MAX_SIDE, then save as JPEG
+function canvasToJpeg(source, w, h) {
+  const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+  const cw = Math.round(w * scale), ch = Math.round(h * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  canvas.getContext('2d').drawImage(source, 0, 0, cw, ch);
+  log('photo', `Resized ${w}x${h} -> ${cw}x${ch}`);
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/jpeg', JPEG_QUALITY));
+}
+
+$('shutterBtn').addEventListener('click', async () => {
+  const video = $('video');
+  if (!video.videoWidth) { warn('photo', 'Camera not ready yet'); return; }
+  log('photo', 'Shutter pressed');
+  try {
+    const blob = await canvasToJpeg(video, video.videoWidth, video.videoHeight);
+    showW2(blob, 'camera');
+  } catch (err) {
+    warn('photo', 'Capture failed:', err);
+  }
+});
+
+$('galleryBtn').addEventListener('click', () => {
+  log('photo', 'Opening gallery / files');
+  $('fileInput').click();
+});
+
+$('fileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';                 // lets the same photo be picked again later
+  if (!file) { log('photo', 'Gallery closed without picking'); return; }
+  log('photo', `Picked "${file.name}" | ${file.type || 'unknown type'} | ${(file.size / 1024).toFixed(0)} KB`);
+
+  try {
+    // Decode in the browser (keeps correct rotation), then shrink
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const blob = await canvasToJpeg(bmp, bmp.width, bmp.height);
+    bmp.close();
+    showW2(blob, 'gallery');
+  } catch (err) {
+    // Some formats (e.g. HEIC on Android) can't be decoded by the browser.
+    // Send the original file instead — the server can read HEIC.
+    warn('photo', 'Browser could not decode this file, sending original to server:', err.message);
+    showW2(file, 'gallery (original)');
+  }
+});
+
+/* ------------------------- Shop names ------------------------- */
+
+async function loadShops() {
+  const input = $('shopInput');
+  if (!input.value) {
+    try { input.value = localStorage.getItem('lastShop') || ''; } catch (_) {}
+    if (input.value) log('shops', `Pre-filled last used shop: "${input.value}"`);
+  }
+  try {
+    const res = await fetch('/api/shop-names');
+    if (res.status === 401) return goToLogin('shops');
+    const data = await res.json();
+    const list = $('shopList');
+    list.innerHTML = '';
+    (data.shop_names || []).forEach((n) => {
+      const o = document.createElement('option');
+      o.value = n;
+      list.appendChild(o);
+    });
+    log('shops', `Loaded ${(data.shop_names || []).length} shop name(s)`);
+  } catch (err) {
+    warn('shops', 'Could not load shop names (typing still works):', err.message);
+  }
+}
+
+/* ------------------------- Extract ------------------------- */
+
+$('retakeBtn').addEventListener('click', () => {
+  log('m', 'Retake pressed');
+  history.back();                      // triggers popstate -> showW1()
+});
+
+$('extractBtn').addEventListener('click', async () => {
+  const shop = $('shopInput').value.trim();
+  if (!shop) { setMsg('Enter a shop name first.', 'error'); $('shopInput').focus(); return; }
+  if (!photoBlob) { setMsg('No photo yet. Tap Retake.', 'error'); return; }
+  if (!navigator.onLine) { setMsg('No internet connection. Connect and tap Extract items again.', 'error'); return; }
+
+  try { localStorage.setItem('lastShop', shop); } catch (_) {}
+
+  const form = new FormData();
+  form.append('photo', photoBlob, 'photo.jpg');   // server needs a .jpg name
+  form.append('shop_name', shop);
+
+  log('extract', `Sending photo to /extract | shop "${shop}" | ${(photoBlob.size / 1024).toFixed(0)} KB`);
+  setBusy(true);
+  const started = Date.now();
+
+  try {
+    const res = await fetch('/extract', { method: 'POST', body: form });
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    if (res.status === 401) return goToLogin('extract');
+
+    let data;
+    try { data = await res.json(); }
+    catch (_) { throw new Error(`Server returned status ${res.status} (not JSON) after ${secs}s. It may have timed out.`); }
+
+    if (!res.ok) {
+      warn('extract', `Failed | status ${res.status} | ${secs}s |`, data);
+      setMsg(data.error || `Extraction failed (status ${res.status}).`, 'error');
+      return;
+    }
+
+    log('extract', `Done in ${secs}s | ${data.item_count} item(s) | photo: ${data.image_url}`);
+    console.table(data.items);
+
+    // Keep the result for the review screen (Step 3)
+    try { sessionStorage.setItem('lastExtract', JSON.stringify(data)); } catch (_) {}
+
+    setMsg(`Found ${data.item_count} item(s) for ${data.shop_name}. The review screen comes in Step 3.`, 'ok');
+  } catch (err) {
+    warn('extract', 'Error:', err.message);
+    setMsg(err.message.includes('Failed to fetch')
+      ? 'Connection lost while extracting. Check your internet and tap Extract items again.'
+      : err.message, 'error');
+  } finally {
+    setBusy(false);
+  }
+});
+
+function setBusy(on) {
+  $('busy').hidden = !on;
+  $('extractBtn').disabled = on;
+  $('retakeBtn').disabled = on;
+  on ? keepScreenOn() : releaseScreen();
+}
+
+// Stop the phone screen locking mid-extraction (which would cancel the upload)
+async function keepScreenOn() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      log('extract', 'Screen kept awake');
+    } else {
+      log('extract', 'Wake lock not supported on this phone');
+    }
+  } catch (err) { warn('extract', 'Wake lock failed:', err.message); }
+}
+function releaseScreen() {
+  if (wakeLock) { wakeLock.release(); wakeLock = null; log('extract', 'Screen lock released'); }
+}
+
+function goToLogin(tag) {
+  warn(tag, 'Not logged in -> going to login page');
+  location.href = LOGIN_URL;
+}
+
+/* ------------------------- Service worker (install support) ------------------------- */
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then((reg) => log('PWA', 'Service worker registered | scope:', reg.scope))
+    .catch((err) => warn('PWA', 'Service worker registration FAILED:', err));
+} else {
+  warn('PWA', 'Service workers not supported in this browser');
+}
+log('PWA', 'Running as installed app:',
+  window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true);
+window.addEventListener('appinstalled', () => log('PWA', 'App installed'));
+
+/* ------------------------- Start ------------------------- */
+log('m', 'Phone app loaded');
+history.replaceState({ screen: 'w1' }, '');
+showW1();
+</script>
+</body>
+</html>
