@@ -530,6 +530,42 @@ def mobile_app():
     print(f"[m] Phone app opened by '{session.get('username')}' (camera screen)", flush=True)
     return render_template("m_app.html")
 
+# ---------------------------------------------------------------
+# PHONE APP: Saved data (Master / Recorded / Corrections tabs).
+# Same data as /admin/data; buttons use the same /admin/... routes.
+# ---------------------------------------------------------------
+def _plain_rows(rows):
+    """Turn database rows into plain dicts the phone page can read (dates -> text)."""
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k, v in d.items():
+            if hasattr(v, "isoformat"):
+                d[k] = v.isoformat()
+        out.append(d)
+    return out
+
+
+@app.route("/m/data")
+@login_required
+def mobile_data():
+    try:
+        master_items = db.get_master_items(limit=500)
+        recorded_items = db.get_recorded_items(limit=500)
+        corrections = db.get_all_corrections(limit=500)
+    except Exception as e:
+        print(f"[m-data] ERROR loading saved data: {e}", flush=True)
+        return f"Database error: {str(e)}", 502
+
+    print(f"[m-data] Saved data opened | master {len(master_items)} | "
+          f"recorded {len(recorded_items)} | corrections {len(corrections)}", flush=True)
+    return render_template(
+        "m_data.html",
+        master_items=_plain_rows(master_items),
+        recorded_items=_plain_rows(recorded_items),
+        corrections=_plain_rows(corrections),
+    )
+
 @app.route('/sw.js')
 def service_worker():
     path = os.path.join(app.static_folder, 'sw.js')
