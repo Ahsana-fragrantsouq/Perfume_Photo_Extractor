@@ -5,6 +5,7 @@ import re
 import io
 from functools import wraps
 
+from flask import send_from_directory
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from werkzeug.security import check_password_hash
 from PIL import Image
@@ -484,6 +485,24 @@ def api_search():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
+
+@app.route('/sw.js')
+def service_worker():
+    path = os.path.join(app.static_folder, 'sw.js')
+    print(f"[PWA] /sw.js requested | exists={os.path.exists(path)}", flush=True)
+    resp = send_from_directory(app.static_folder, 'sw.js', mimetype='application/javascript')
+    resp.headers['Cache-Control'] = 'no-cache'
+    print(f"[PWA] /sw.js served | status={resp.status_code}", flush=True)
+    return resp
+
+@app.route('/manifest.webmanifest')
+def manifest():
+    path = os.path.join(app.static_folder, 'manifest.webmanifest')
+    print(f"[PWA] /manifest.webmanifest requested | exists={os.path.exists(path)}", flush=True)
+    resp = send_from_directory(app.static_folder, 'manifest.webmanifest',
+                               mimetype='application/manifest+json')
+    print(f"[PWA] /manifest.webmanifest served | status={resp.status_code}", flush=True)
+    return resp
 
 
 if __name__ == "__main__":
