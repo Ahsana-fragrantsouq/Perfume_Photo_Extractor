@@ -4,6 +4,7 @@ import json
 import re
 import io
 from functools import wraps
+from datetime import timedelta
 
 from flask import send_from_directory
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
@@ -27,6 +28,21 @@ pillow_heif.register_heif_opener()
 app = Flask(__name__)
 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-insecure-key-change-in-render")
+# ---------------------------------------------------------------
+# LOGIN MEMORY: keep users logged in for 1 year.
+# The year restarts every time the app is used, so a phone that
+# opens the app at least once a year never sees the login page.
+# ---------------------------------------------------------------
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=365)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+print("[startup] Login sessions will last 365 days", flush=True)
+
+if not os.environ.get("FLASK_SECRET_KEY"):
+    print("[startup] WARNING: FLASK_SECRET_KEY not set on Render - using insecure dev key!", flush=True)
+else:
+    print("[startup] FLASK_SECRET_KEY is set", flush=True)
+
+
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -41,18 +57,23 @@ except Exception as e:
 
 
 def login_required(view_func):
+    """For PAGES. If not logged in, send to the login page, then back here after."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
+            print(f"[auth] Not logged in -> redirecting {request.path} to login page", flush=True)
             return redirect(url_for("login", next=request.path))
+        print(f"[auth] '{session.get('username')}' opened page {request.path}", flush=True)
         return view_func(*args, **kwargs)
     return wrapped
 
 
 def api_login_required(view_func):
+    """For BUTTONS / API calls (extract, save, delete...). If not logged in, return an error instead of a page."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
+            print(f"[auth] BLOCKED api call {request.path} - not logged in", flush=True)
             return jsonify({"error": "not_logged_in", "message": "Please log in again."}), 401
         return view_func(*args, **kwargs)
     return wrapped
@@ -61,29 +82,42 @@ def api_login_required(view_func):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
+
+    # Already logged in (e.g. app reopened)? Skip the login page entirely.
+    if request.method == "GET" and session.get("user_id"):
+        next_url = request.args.get("next") or url_for("index")
+        print(f"[login] '{session.get('username')}' already logged in -> skipping login page, going to {next_url}", flush=True)
+        return redirect(next_url)
+
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password", "")
+        print(f"[login] Login attempt for '{username}'", flush=True)  # password is never printed
 
         user = None
         try:
             user = db.get_user_by_username(username)
         except Exception as e:
             error = f"Could not check login right now: {e}"
+            print(f"[login] ERROR checking database: {e}", flush=True)
 
         if user and check_password_hash(user["password_hash"], password):
             session["user_id"] = user["id"]
             session["username"] = user["username"]
+            session.permanent = True  # remember this device for 365 days
             next_url = request.args.get("next") or url_for("index")
+            print(f"[login] SUCCESS '{username}' - remembered for 365 days, going to {next_url}", flush=True)
             return redirect(next_url)
         elif not error:
             error = "Incorrect username or password."
+            print(f"[login] FAILED '{username}' - wrong username or password", flush=True)
 
     return render_template("login.html", error=error)
 
 
 @app.route("/logout")
 def logout():
+    print(f"[logout] '{session.get('username')}' logged out - login page will show next time", flush=True)
     session.clear()
     return redirect(url_for("login"))
 
