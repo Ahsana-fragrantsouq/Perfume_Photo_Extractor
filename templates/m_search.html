@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Search · FS Extractor</title>
+
+  <!-- PWA -->
+  <meta name="theme-color" content="#1c1a17">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <style>
+    /* Same colours as the Saved data screen */
+    :root {
+      --panel: #1c1a17; --card: #221f1b; --field: #2a2723; --line: #3d3934;
+      --text: #f3efe8; --muted: #a39d93; --gold: #c9a45c;
+      --red: #e0806f; --green: #8fc79a;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--panel); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+
+    header { padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px; display: flex; flex-direction: column; gap: 10px; }
+    .back { display: flex; align-items: center; gap: 6px; font-size: 17px; font-weight: 600; padding: 6px 0; align-self: flex-start; }
+    .back svg { width: 22px; height: 22px; color: var(--muted); }
+
+    .search-box { position: relative; }
+    .search-box svg { position: absolute; left: 12px; top: 50%; width: 18px; height: 18px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+    input[type="search"] {
+      width: 100%; height: 48px; padding: 0 12px 0 40px; background: var(--field); color: var(--text);
+      border: 1px solid var(--line); border-radius: 10px; font-size: 16px;
+    }
+    .status { font-size: 13px; color: var(--muted); min-height: 1.2em; }
+    .status.error { color: var(--red); }
+
+    .list { flex: 1; overflow-y: auto; padding: 2px 16px calc(16px + env(safe-area-inset-bottom, 0px)); -webkit-overflow-scrolling: touch; }
+    .empty { color: var(--muted); text-align: center; padding: 48px 16px; line-height: 1.6; }
+
+    .card { padding: 12px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+    .title { font-size: 15px; font-weight: 600; line-height: 1.35; }
+    .sub { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+    .pname { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 13px; }
+    .sku { color: var(--green); }
+    .sku.none { color: var(--muted); }
+    .photo-link { color: var(--gold); text-decoration: underline; padding: 4px 0; }
+    .when { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    mark { background: rgba(201, 164, 92, .28); color: inherit; border-radius: 3px; padding: 0 1px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <button id="backBtn" class="back" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      Search
+    </button>
+
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input id="q" type="search" enterkeyhint="search" placeholder="Brand, name, shop or SKU" autocomplete="off" aria-label="Search saved items">
+    </div>
+    <div id="status" class="status" role="status"></div>
+  </header>
+
+  <main id="list" class="list">
+    <div class="empty">Type at least 2 letters to search your saved items.</div>
+  </main>
+
+<script>
+/* =================================================================
+   FS Extractor — phone Search (same /api/search as the laptop page)
+   Log tag: [search]
+   ================================================================= */
+
+const $ = (id) => document.getElementById(id);
+const log = (...a) => console.log('[search]', ...a);
+const warn = (...a) => console.warn('[search]', ...a);
+
+const MIN_CHARS = 2;
+let timer = null;
+let controller = null;   // cancels an older search when you keep typing
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+// Escape, then highlight the search words in gold
+function hl(s, q) {
+  const safe = esc(s);
+  if (!q) return safe;
+  const words = q.split(/\s+/).filter(Boolean).map((w) => esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return words.length ? safe.replace(new RegExp(`(${words.join('|')})`, 'gi'), '<mark>$1</mark>') : safe;
+}
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function when(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (isNaN(d)) return String(v);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+const join = (q, ...parts) => parts.filter((p) => p !== null && p !== undefined && String(p).trim() !== '').map((p) => hl(p, q)).join(' · ');
+
+function setStatus(text, isError) {
+  $('status').textContent = text;
+  $('status').className = 'status' + (isError ? ' error' : '');
+}
+
+function card(r, q) {
+  return `
+    <div class="card">
+      <div class="title">${join(q, r.brand, r.name) || 'Unnamed item'}</div>
+      <div class="sub">${join(q, r.shop_name, r.size, r.concentration, r.gender, r.condition)}</div>
+      ${r.product_name ? `<div class="pname">${hl(r.product_name, q)}</div>` : ''}
+      <div class="row">
+        ${r.sku ? `<span class="sku">SKU ${hl(r.sku, q)}</span>` : '<span class="sku none">No SKU yet</span>'}
+        ${r.image_url ? `<a class="photo-link" href="${esc(r.image_url)}" target="_blank" rel="noopener">View photo</a>` : ''}
+      </div>
+      ${r.updated_at || r.created_at ? `<div class="when">${when(r.updated_at || r.created_at)}</div>` : ''}
+    </div>`;
+}
+
+async function runSearch() {
+  const q = $('q').value.trim();
+  if (q.length < MIN_CHARS) {
+    if (controller) controller.abort();
+    setStatus('');
+    $('list').innerHTML = '<div class="empty">Type at least 2 letters to search your saved items.</div>';
+    return;
+  }
+  if (controller) controller.abort();
+  controller = new AbortController();
+
+  log(`Searching "${q}"`);
+  setStatus('Searching…');
+  const started = Date.now();
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal });
+    if (res.status === 401) { warn('Not logged in -> login page'); location.href = '/login?next=/m/search'; return; }
+    const data = await res.json();
+    if (!res.ok) { warn('Search failed:', data); setStatus(data.error || `Search failed (status ${res.status}).`, true); return; }
+
+    const results = data.results || [];
+    log(`"${q}" -> ${results.length} result(s) in ${Date.now() - started} ms`);
+    setStatus(`${results.length} result${results.length === 1 ? '' : 's'}`);
+    $('list').innerHTML = results.length
+      ? results.map((r) => card(r, q)).join('')
+      : `<div class="empty">No saved items match “${esc(q)}”.</div>`;
+    $('list').scrollTop = 0;
+  } catch (err) {
+    if (err.name === 'AbortError') return;   // a newer search replaced this one
+    warn('Search error:', err.message);
+    setStatus(navigator.onLine ? 'Search failed. Try again.' : 'No internet connection.', true);
+  }
+}
+
+// Search as you type (short pause), or straight away on the keyboard's Search key
+$('q').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, 350); });
+$('q').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); $('q').blur(); runSearch(); }
+});
+
+$('backBtn').addEventListener('click', () => {
+  log('Back to camera');
+  if (document.referrer.includes('/m/') && !document.referrer.includes('/m/search')) history.back();
+  else location.href = '/m/';
+});
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch((err) => warn('Service worker registration failed:', err));
+}
+
+log('Search screen loaded');
+$('q').focus();
+</script>
+</body>
+</html>

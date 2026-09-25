@@ -565,6 +565,17 @@ def mobile_data():
         recorded_items=_plain_rows(recorded_items),
         corrections=_plain_rows(corrections),
     )
+
+# search page
+# ---------------------------------------------------------------
+# PHONE APP: Search (same /api/search as the laptop search page).
+# ---------------------------------------------------------------
+@app.route("/m/search")
+@login_required
+def mobile_search():
+    print(f"[m-search] Search screen opened by '{session.get('username')}'", flush=True)
+    return render_template("m_search.html")
+
 # icon
 @app.route("/favicon.ico")
 def favicon():
