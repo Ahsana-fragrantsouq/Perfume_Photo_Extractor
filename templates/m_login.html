@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Log in · FS Extractor</title>
+
+  <!-- PWA -->
+  <meta name="theme-color" content="#000000">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <style>
+    :root {
+      --panel: #1c1a17; --field: #2a2723; --line: #3d3934;
+      --text: #f3efe8; --muted: #a39d93; --gold: #c9a45c; --gold-press: #b38f4a; --red: #e0806f;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #000; color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      padding: calc(24px + env(safe-area-inset-top, 0px)) 24px calc(24px + env(safe-area-inset-bottom, 0px));
+    }
+    main { width: 100%; max-width: 360px; }
+    .brand { text-align: center; margin-bottom: 32px; }
+    .brand img { width: 72px; height: 72px; border-radius: 16px; display: block; margin: 0 auto 14px; }
+    .brand h1 { font-size: 20px; font-weight: 600; margin: 0; }
+    .brand p { color: var(--muted); font-size: 14px; margin: 6px 0 0; }
+
+    label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+    .field { margin-bottom: 16px; position: relative; }
+    input {
+      width: 100%; height: 52px; padding: 0 14px; background: var(--field); color: var(--text);
+      border: 1px solid var(--line); border-radius: 12px; font-size: 16px; font-family: inherit;
+    }
+    input:focus { outline: none; border-color: var(--gold); }
+    .field.pw input { padding-right: 64px; }
+    .show {
+      position: absolute; right: 6px; bottom: 6px; height: 40px; padding: 0 10px;
+      background: none; border: 0; color: var(--gold); font: inherit; font-size: 14px; cursor: pointer;
+    }
+    .error {
+      background: rgba(224, 128, 111, .12); border: 1px solid #6b3a31; color: var(--red);
+      border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.45; margin-bottom: 16px;
+    }
+    button[type="submit"] {
+      width: 100%; height: 54px; margin-top: 8px; border: 0; border-radius: 12px;
+      background: var(--gold); color: #1c1a17; font: inherit; font-size: 17px; font-weight: 600; cursor: pointer;
+    }
+    button[type="submit"]:active { background: var(--gold-press); }
+    button[type="submit"]:disabled { opacity: .6; }
+    button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+    .note { color: var(--muted); font-size: 13px; text-align: center; margin-top: 18px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">
+      <img src="/static/icons/icon-192.png" alt="">
+      <h1>FS Extractor</h1>
+      <p>Fragrant Souq</p>
+    </div>
+
+    {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+
+    <!-- No action attribute: the form posts back to this same address, keeping ?next=... -->
+    <form method="post" id="loginForm">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false"
+               value="{{ request.form.get('username', '') }}" required>
+      </div>
+      <div class="field pw">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="button" class="show" id="showBtn" aria-label="Show password">Show</button>
+      </div>
+      <button type="submit" id="submitBtn">Log in</button>
+    </form>
+
+    <p class="note">You only need to log in once. This phone will stay logged in for a year.</p>
+  </main>
+
+<script>
+/* Phone login page. Log tag: [login] */
+const log = (...a) => console.log('[login]', ...a);
+
+document.getElementById('showBtn').addEventListener('click', () => {
+  const pw = document.getElementById('password');
+  const show = pw.type === 'password';
+  pw.type = show ? 'text' : 'password';
+  document.getElementById('showBtn').textContent = show ? 'Hide' : 'Show';
+  log(show ? 'Password shown' : 'Password hidden');
+});
+
+document.getElementById('loginForm').addEventListener('submit', () => {
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Logging in…';
+  log('Submitting login');   // the password is never logged
+});
+
+const u = document.getElementById('username');
+(u.value ? document.getElementById('password') : u).focus();
+log('Login page loaded{% if error %} | error shown{% endif %}');
+</script>
+</body>
+</html>
