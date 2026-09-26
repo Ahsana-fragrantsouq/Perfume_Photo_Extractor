@@ -35,9 +35,6 @@
     .back svg { width: 22px; height: 22px; color: var(--muted); }
     .logout { color: var(--red); font-size: 14px; padding: 8px 4px; text-decoration: none; }
 
-    .tabs { display: flex; background: var(--field); border-radius: 10px; padding: 3px; }
-    .tabs button { flex: 1; padding: 8px 2px; border-radius: 8px; font-size: 13px; color: var(--muted); }
-    .tabs button[aria-selected="true"] { background: var(--panel); color: var(--text); font-weight: 600; }
 
     input[type="text"], input[type="search"] {
       width: 100%; height: 44px; padding: 0 12px; background: var(--field); color: var(--text);
@@ -56,9 +53,6 @@
     .sub { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
     .pname { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
     .when { font-size: 12px; color: var(--muted); margin-top: 4px; }
-    .change { margin-top: 5px; font-size: 14px; line-height: 1.4; }
-    .change s { color: var(--muted); }
-    .change .none { color: var(--muted); font-style: italic; }
 
     .sku-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
     .sku-row label { font-size: 12px; color: var(--muted); }
@@ -96,12 +90,6 @@
       <a class="logout" href="/logout?next=/m/" id="logoutLink">Log out</a>
     </div>
 
-    <div class="tabs" role="tablist">
-      <button role="tab" data-tab="master_table" aria-selected="true">Master <span data-count="master_table"></span></button>
-      <button role="tab" data-tab="recorded_items" aria-selected="false">Recorded <span data-count="recorded_items"></span></button>
-      <button role="tab" data-tab="corrections" aria-selected="false">Corrections <span data-count="corrections"></span></button>
-    </div>
-
     <input id="filter" type="search" placeholder="Filter by shop, brand, name, SKU" autocomplete="off" aria-label="Filter">
     <div id="tabHint" class="hint"></div>
   </header>
@@ -121,13 +109,14 @@
 <!-- Data from the server (Flask fills this in). Kept separate from the code below
      so VS Code doesn't flag the Flask template tags as JavaScript errors. -->
 <script id="saved-data" type="application/json">
-{{ {"master_table": master_items, "recorded_items": recorded_items, "corrections": corrections} | tojson }}
+{{ {"master_table": master_items} | tojson }}
 </script>
 
 <script>
 /* =================================================================
-   FS Extractor — phone Saved data (Step 4)
-   Same data and same routes as /admin/data on the laptop:
+   FS Extractor — phone Saved data (Master table only)
+   Same Master data and same routes as /admin/data on the laptop.
+   Recorded and Corrections are only shown on the laptop page.
      Delete selected  -> POST /admin/delete
      Update SKUs      -> POST /admin/update-sku
      Save to Airtable -> POST /admin/create-in-airtable
@@ -137,21 +126,16 @@
 // Saved data is placed by Flask in the <script id="saved-data"> block above.
 const DATA = JSON.parse(document.getElementById('saved-data').textContent);
 
-const TAB_HINTS = {
-  master_table:   'Saved items. Edit SKUs here, or send unmatched items to Airtable.',
-  recorded_items: 'Raw items exactly as Claude read them, before your corrections.',
-  corrections:    'Every change you made to Claude’s values. Used to improve future extractions.',
-};
 
 const $ = (id) => document.getElementById(id);
 const log = (...a) => console.log('[data]', ...a);
 const warn = (...a) => console.warn('[data]', ...a);
 
-let tab = 'master_table';
-const picked = { master_table: new Set(), recorded_items: new Set(), corrections: new Set() };
+const tab = 'master_table';             // the only table shown on the phone
+const picked = { master_table: new Set() };
 const skuEdits = {};    // row id -> SKU typed but not yet saved with Update SKUs
 
-log(`Loaded | master ${DATA.master_table.length} | recorded ${DATA.recorded_items.length} | corrections ${DATA.corrections.length}`);
+log(`Loaded | master ${DATA.master_table.length} item(s)`);
 
 /* ------------------------- Helpers ------------------------- */
 
@@ -209,34 +193,7 @@ function masterCard(r) {
     </div>`;
 }
 
-function recordedCard(r) {
-  return `
-    <div class="card${picked.recorded_items.has(r.id) ? ' picked' : ''}" data-id="${r.id}">
-      <input type="checkbox" class="tick" data-id="${r.id}" ${picked.recorded_items.has(r.id) ? 'checked' : ''} aria-label="Select item ${r.id}">
-      <div class="body">
-        <div class="title">${join(r.brand, r.name) || 'Unnamed item'}</div>
-        <div class="sub">${join(r.shop_name, r.size, r.concentration, r.gender, r.condition)}</div>
-        <div class="when">${when(r.created_at)}</div>
-      </div>
-    </div>`;
-}
-
-function correctionCard(r) {
-  const from = r.original_value === null || r.original_value === '' ? '<span class="none">empty</span>' : `<s>${esc(r.original_value)}</s>`;
-  const to = r.corrected_value === null || r.corrected_value === '' ? '<span class="none">empty</span>' : `<strong>${esc(r.corrected_value)}</strong>`;
-  return `
-    <div class="card${picked.corrections.has(r.id) ? ' picked' : ''}" data-id="${r.id}">
-      <input type="checkbox" class="tick" data-id="${r.id}" ${picked.corrections.has(r.id) ? 'checked' : ''} aria-label="Select correction ${r.id}">
-      <div class="body">
-        <div class="title">${esc(r.item_context) || 'Unknown item'}</div>
-        <div class="sub">${join(r.shop_name, r.field_name)}</div>
-        <div class="change">${from} → ${to}</div>
-        <div class="when">${when(r.created_at)}</div>
-      </div>
-    </div>`;
-}
-
-const CARD = { master_table: masterCard, recorded_items: recordedCard, corrections: correctionCard };
+const CARD = { master_table: masterCard };
 
 function render() {
   const rows = visibleRows();
@@ -244,9 +201,8 @@ function render() {
     ? rows.map(CARD[tab]).join('')
     : `<div class="empty">${$('filter').value ? 'Nothing matches this filter.' : 'Nothing saved here yet.'}</div>`;
 
-  document.querySelectorAll('[data-count]').forEach((el) => { el.textContent = DATA[el.dataset.count].length; });
-  $('tabHint').textContent = TAB_HINTS[tab];
-  $('skuRow').hidden = tab !== 'master_table';
+  const total = DATA.master_table.length;
+  $('tabHint').textContent = `${total} saved item${total === 1 ? '' : 's'}${$('filter').value ? ` · ${rows.length} shown` : ''}`;
   refreshButtons();
 }
 
@@ -265,18 +221,7 @@ function pendingSkuChanges() {
     .map((r) => ({ id: r.id, sku: skuEdits[r.id].trim() }));
 }
 
-/* ------------------------- Tabs, filter, selecting ------------------------- */
-
-document.querySelectorAll('[role="tab"]').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    tab = btn.dataset.tab;
-    document.querySelectorAll('[role="tab"]').forEach((b) => b.setAttribute('aria-selected', String(b === btn)));
-    log(`Tab -> ${tab}`);
-    setMsg('');
-    $('list').scrollTop = 0;
-    render();
-  });
-});
+/* ------------------------- Filter, selecting ------------------------- */
 
 let filterTimer;
 $('filter').addEventListener('input', () => {
@@ -316,8 +261,7 @@ $('list').addEventListener('focusout', (e) => {
 $('deleteBtn').addEventListener('click', async () => {
   const ids = [...picked[tab]];
   if (!ids.length) return;
-  const label = { master_table: 'Master', recorded_items: 'Recorded', corrections: 'Corrections' }[tab];
-  if (!confirm(`Delete ${ids.length} row(s) from ${label}? This cannot be undone.`)) { log('Delete cancelled'); return; }
+  if (!confirm(`Delete ${ids.length} saved item(s)? This cannot be undone.`)) { log('Delete cancelled'); return; }
 
   log(`Deleting ${ids.length} row(s) from ${tab}:`, ids);
   $('deleteBtn').disabled = true;
@@ -336,7 +280,7 @@ $('deleteBtn').addEventListener('click', async () => {
     picked[tab].clear();
     ids.forEach((id) => delete skuEdits[id]);
     log(`Deleted ${data.deleted} row(s) from ${tab}`);
-    setMsg(`Deleted ${data.deleted} row(s).`, 'ok');
+    setMsg(`Deleted ${data.deleted} item(s).`, 'ok');
     render();
   } catch (err) {
     warn('Delete error:', err.message);

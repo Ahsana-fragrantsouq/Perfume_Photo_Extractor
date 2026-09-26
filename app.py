@@ -112,14 +112,20 @@ def login():
             error = "Incorrect username or password."
             print(f"[login] FAILED '{username}' - wrong username or password", flush=True)
 
-    return render_template("login.html", error=error)
+        # Phone app pages live under /m/ -> show the phone login; otherwise the laptop login
+    is_phone = (request.args.get("next") or "").startswith("/m")
+    template = "m_login.html" if is_phone else "login.html"
+    print(f"[login] Showing {'phone' if is_phone else 'laptop'} login page", flush=True)
+    return render_template(template, error=error)
 
 
 @app.route("/logout")
 def logout():
     print(f"[logout] '{session.get('username')}' logged out - login page will show next time", flush=True)
     session.clear()
-    return redirect(url_for("login"))
+    # Phone logout sends ?next=/m/ so the phone login page shows, and you land back on the camera
+    next_url = request.args.get("next")
+    return redirect(url_for("login", next=next_url) if next_url else url_for("login"))
 
 
 @app.route("/")
@@ -551,20 +557,12 @@ def _plain_rows(rows):
 def mobile_data():
     try:
         master_items = db.get_master_items(limit=500)
-        recorded_items = db.get_recorded_items(limit=500)
-        corrections = db.get_all_corrections(limit=500)
     except Exception as e:
         print(f"[m-data] ERROR loading saved data: {e}", flush=True)
         return f"Database error: {str(e)}", 502
 
-    print(f"[m-data] Saved data opened | master {len(master_items)} | "
-          f"recorded {len(recorded_items)} | corrections {len(corrections)}", flush=True)
-    return render_template(
-        "m_data.html",
-        master_items=_plain_rows(master_items),
-        recorded_items=_plain_rows(recorded_items),
-        corrections=_plain_rows(corrections),
-    )
+    print(f"[m-data] Saved data opened | master {len(master_items)} item(s)", flush=True)
+    return render_template("m_data.html", master_items=_plain_rows(master_items))
 
 # search page
 # ---------------------------------------------------------------
