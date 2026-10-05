@@ -51,6 +51,12 @@
       padding: 32px; text-align: center; color: var(--muted); line-height: 1.5;
     }
     .cam-msg button { color: var(--gold); text-decoration: underline; }
+    .lens {
+      position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px;
+      height: 40px; padding: 0 14px; border-radius: 20px; background: rgba(0,0,0,.55);
+      color: var(--text); font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px;
+    }
+    .lens svg { width: 18px; height: 18px; }
 
     .shutter-row { display: flex; justify-content: center; padding: 14px 0 12px; }
     .shutter {
@@ -161,6 +167,10 @@
     <div class="viewfinder">
       <video id="video" playsinline muted autoplay></video>
       <div id="camMsg" class="cam-msg">Starting camera…</div>
+      <button id="lensBtn" class="lens" type="button" hidden aria-label="Switch camera lens">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><path d="M9.5 13a2.5 2.5 0 0 1 4.3-1.7M14.5 13a2.5 2.5 0 0 1-4.3 1.7"/></svg>
+        <span id="lensLabel">Lens 1</span>
+      </button>
     </div>
 
     <div class="shutter-row">
@@ -319,6 +329,54 @@ function setMsg(text, type) {
 
 /* ------------------------- Camera ------------------------- */
 
+/* Phones often have several back cameras (main, ultra-wide, macro, depth).
+   Asking just for "back camera" can open the wrong one, so after permission
+   we list all cameras and pick the MAIN one:
+     - iPhone: the one labelled exactly "Back Camera"
+     - Android: the back camera with the lowest number ("camera2 0, facing back")
+     - anything labelled ultra / wide angle / tele / macro / depth goes last
+   The Lens button lets you switch if the guess is wrong; your choice is remembered. */
+const CAM_KEY = 'cameraDeviceId';
+let backCams = [];      // back cameras, main first
+let camIndex = 0;       // which one is open now
+
+function openStream(deviceId) {
+  const size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const video = deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: { ideal: 'environment' }, ...size };
+  return navigator.mediaDevices.getUserMedia({ audio: false, video });
+}
+
+function lensScore(label) {
+  const l = (label || '').toLowerCase();
+  if (/ultra|wide angle|tele|macro|depth|infrared/.test(l)) return 100;   // not the main lens
+  if (l === 'back camera') return -10;                                     // iPhone main lens
+  const m = l.match(/camera2? (\d+)/);                                     // Android "camera2 0"
+  return m ? Number(m[1]) : 50;
+}
+
+async function listBackCameras() {
+  const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  log('camera', `Found ${all.length} camera(s):`, all.map((d) => d.label || '(no label)'));
+  let backs = all.filter((d) => /back|rear|environment/i.test(d.label));
+  if (!backs.length) backs = all;
+  backs.sort((a, b) => lensScore(a.label) - lensScore(b.label));
+  log('camera', 'Back cameras, best first:', backs.map((d) => d.label || d.deviceId.slice(0, 8)));
+  return backs;
+}
+
+async function attachStream(s) {
+  stream = s;
+  const video = $('video');
+  video.srcObject = s;
+  await video.play();
+  const st = s.getVideoTracks()[0].getSettings();
+  const label = s.getVideoTracks()[0].label;
+  camIndex = Math.max(0, backCams.findIndex((d) => d.deviceId === st.deviceId));
+  $('lensLabel').textContent = `Lens ${camIndex + 1}/${backCams.length || 1}`;
+  $('lensBtn').hidden = backCams.length < 2;
+  log('camera', `Running "${label}" | ${st.width}x${st.height} | lens ${camIndex + 1} of ${backCams.length}`);
+}
+
 async function startCamera() {
   if (stream) { log('camera', 'Already running'); return; }
   const msg = $('camMsg');
@@ -333,16 +391,32 @@ async function startCamera() {
   }
 
   try {
-    log('camera', 'Requesting back camera…');
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-    });
-    const video = $('video');
-    video.srcObject = stream;
-    await video.play();
-    const s = stream.getVideoTracks()[0].getSettings();
-    log('camera', `Running | ${s.width}x${s.height} | facing: ${s.facingMode || 'unknown'}`);
+    let saved = null;
+    try { saved = localStorage.getItem(CAM_KEY); } catch (_) {}
+
+    // 1. Open a camera (your saved lens, or any back camera) - this also gives permission
+    let s;
+    try {
+      log('camera', saved ? 'Opening your saved lens…' : 'Requesting back camera…');
+      s = await openStream(saved);
+    } catch (err) {
+      if (!saved) throw err;
+      warn('camera', 'Saved lens not available any more, falling back:', err.name);
+      try { localStorage.removeItem(CAM_KEY); } catch (_) {}
+      saved = null;
+      s = await openStream(null);
+    }
+
+    // 2. Now camera names are visible - find the main one
+    backCams = await listBackCameras();
+    const openedId = s.getVideoTracks()[0].getSettings().deviceId;
+    if (!saved && backCams.length && backCams[0].deviceId !== openedId) {
+      log('camera', `Opened "${s.getVideoTracks()[0].label}" - switching to main lens "${backCams[0].label}"`);
+      s.getTracks().forEach((t) => t.stop());
+      s = await openStream(backCams[0].deviceId);
+    }
+
+    await attachStream(s);
     msg.hidden = true;
     $('shutterBtn').disabled = false;
   } catch (err) {
@@ -354,6 +428,28 @@ async function startCamera() {
       : 'Camera couldn’t start.<br><button type="button" onclick="startCamera()">Try again</button> or use <button type="button" onclick="$(\'fileInput\').click()">Gallery</button>.';
   }
 }
+
+// Lens button: try the next back camera and remember it
+$('lensBtn').addEventListener('click', async () => {
+  if (backCams.length < 2) return;
+  const next = (camIndex + 1) % backCams.length;
+  const cam = backCams[next];
+  log('camera', `Lens button -> trying "${cam.label}"`);
+  $('shutterBtn').disabled = true;
+  try {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    await attachStream(await openStream(cam.deviceId));
+    try { localStorage.setItem(CAM_KEY, cam.deviceId); } catch (_) {}
+    log('camera', `Lens saved for next time: "${cam.label}"`);
+  } catch (err) {
+    warn('camera', `Could not open "${cam.label}":`, err.name);
+    stream = null;
+    startCamera();
+  } finally {
+    $('shutterBtn').disabled = !stream;
+  }
+});
 
 function stopCamera() {
   if (!stream) return;
