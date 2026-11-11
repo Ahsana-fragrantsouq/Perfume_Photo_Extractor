@@ -42,10 +42,31 @@ def _is_tester_row(sku, product_name):
     return sku.endswith("T") or "tester" in name
 
 
+def _normalize_text(value):
+    return (value or "").strip().lower()
+
+
+def _strip_brand_prefix(perfume_name, brand):
+    """Some item_master rows store perfume_name with the brand name prefixed
+    onto it (e.g. perfume_name='Abdul Samad Al Qurashi Amber touch' for
+    brand='Abdul Samad Al Qurashi'), others store just the name on its own
+    (e.g. perfume_name='Opulentia Flame By Paris Corner'). This data was
+    hand-entered inconsistently in Airtable before being loaded here, so we
+    strip the prefix when present — that way both conventions compare equal
+    to the plain name Claude extracts from a shelf photo."""
+    norm_name = _normalize_text(perfume_name)
+    norm_brand = _normalize_text(brand)
+    if norm_brand and norm_name.startswith(norm_brand + " "):
+        return perfume_name.strip()[len(brand.strip()) + 1:].strip()
+    return (perfume_name or "").strip()
+
+
 def find_match(brand, name, size, condition=None):
     """
-    Search item_master for a match on brand + perfume_name (case-insensitive,
-    whitespace-trimmed), then compare size ourselves with spacing/case ignored.
+    Search item_master for a match on brand (case-insensitive, whitespace-
+    trimmed), then compare perfume_name ourselves — stripping any brand
+    prefix some rows have baked into that field — then compare size with
+    spacing/case ignored too.
 
     Returns {"sku": ..., "product_name": ...} — either may be None if no match
     was found.
@@ -68,28 +89,39 @@ def find_match(brand, name, size, condition=None):
         conn = _get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT sku, size, product_name
+            SELECT sku, size, product_name, perfume_name
             FROM item_master
             WHERE LOWER(TRIM(brand)) = LOWER(TRIM(%s))
-              AND LOWER(TRIM(perfume_name)) = LOWER(TRIM(%s))
-        """, (brand, name))
+        """, (brand,))
         rows = cur.fetchall()
         conn.close()
 
         if not rows:
-            print(f"[competitor_db] No match found for brand={brand!r} name={name!r} — SKU will be blank.")
+            print(f"[competitor_db] No brand match for brand={brand!r} — SKU will be blank.")
+            return no_match
+
+        target_name = _normalize_text(name)
+        name_matches = []
+        for sku, row_size, product_name, perfume_name in rows:
+            stripped = _strip_brand_prefix(perfume_name, brand)
+            if _normalize_text(stripped) == target_name:
+                name_matches.append((sku, row_size, product_name))
+
+        if not name_matches:
+            print(f"[competitor_db] Brand matched {len(rows)} row(s), but none had perfume_name={name!r} "
+                  f"(after stripping any brand prefix) — SKU will be blank.")
             return no_match
 
         target_size = _normalize_size(size)
         available_sizes = []
         size_matches = []
-        for sku, row_size, product_name in rows:
+        for sku, row_size, product_name in name_matches:
             available_sizes.append(row_size)
             if _normalize_size(row_size) == target_size:
                 size_matches.append((sku, row_size, product_name))
 
         if not size_matches:
-            print(f"[competitor_db] Brand/Name matched {len(rows)} row(s), but none had size={size!r}. "
+            print(f"[competitor_db] Brand/Name matched {len(name_matches)} row(s), but none had size={size!r}. "
                   f"Sizes available: {available_sizes} — SKU will be blank.")
             return no_match
 
@@ -237,5 +269,3 @@ def create_record(brand, name, size, concentration, gender):
             conn.rollback()
             conn.close()
         return {"status": "failed"}
-
-        
