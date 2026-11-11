@@ -480,6 +480,45 @@ def api_search():
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
+@app.route("/admin/inspect-competitor-db")
+@login_required
+def inspect_competitor_db():
+    """TEMPORARY — for inspecting the competitor-table database's schema.
+    Remove this route once the real integration is built."""
+    url = os.environ.get("COMPETITOR_DATABASE_URL")
+    if not url:
+        return "COMPETITOR_DATABASE_URL not set in Render environment.", 500
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+
+    try:
+        conn = psycopg2.connect(url, connect_timeout=8)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema='public' ORDER BY table_name;
+        """)
+        tables = [r[0] for r in cur.fetchall()]
+
+        output_lines = []
+        for t in tables:
+            cur.execute("""
+                SELECT column_name, data_type FROM information_schema.columns
+                WHERE table_name=%s ORDER BY ordinal_position;
+            """, (t,))
+            cols = cur.fetchall()
+            output_lines.append(f"TABLE: {t}")
+            for col_name, col_type in cols:
+                output_lines.append(f"    {col_name} ({col_type})")
+            cur.execute(f'SELECT * FROM "{t}" LIMIT 2;')
+            sample = cur.fetchall()
+            output_lines.append(f"    sample rows: {sample}")
+            output_lines.append("")
+
+        conn.close()
+        return "<pre>" + "\n".join(output_lines) + "</pre>"
+    except Exception as e:
+        return f"Connection failed: {e}", 500
 
 @app.route("/health")
 def health():
