@@ -13,7 +13,7 @@ import anthropic
 import psycopg2
 
 import db
-import airtable_client
+import competitor_client
 import photo_storage
 
 # Registers HEIC/HEIF support with Pillow. Some phones (iPhones especially, some
@@ -325,7 +325,7 @@ def record():
         print(f"[record] {len(selected_items)} of {len(items)} item(s) were selected to save.")
 
         for item in selected_items:
-            match = airtable_client.find_match(item.get("brand"), item.get("name"), item.get("size"), item.get("condition"))
+            match = competitor_client.find_match(item.get("brand"), item.get("name"), item.get("size"), item.get("condition"))
             item["sku"] = match["sku"]
             item["product_name"] = match["product_name"] or build_fallback_product_name(item)
 
@@ -368,6 +368,11 @@ def admin_data():
 @app.route("/admin/create-in-airtable", methods=["POST"])
 @api_login_required
 def admin_create_in_airtable():
+    """Generates a new SKU (and item_master row) for a master_table row that
+    has no SKU yet, via competitor_client.create_record(), and syncs the new
+    SKU back onto that master_table row.
+    POST /admin/create-in-airtable
+    body: {"id": 26, "brand": "...", "name": "...", "size": "...", "concentration": "...", "gender": "..."}"""
     data = request.get_json(silent=True) or {}
 
     try:
@@ -382,19 +387,19 @@ def admin_create_in_airtable():
     gender = (data.get("gender") or "").strip()
 
     if not brand or not name:
-        return jsonify({"error": "Brand and Name are required to create an Airtable record."}), 400
+        return jsonify({"error": "Brand and Name are required to generate a SKU."}), 400
 
     try:
-        result = airtable_client.create_record(brand, name, size, concentration, gender)
+        result = competitor_client.create_record(brand, name, size, concentration, gender)
 
         if result["status"] == "no_brand":
-            return jsonify({"error": "no_brand", "message": f"No brand found in Brands table matching '{brand}'."}), 404
+            return jsonify({"error": "no_brand", "message": f"No brand found matching '{brand}'."}), 404
 
         if result["status"] == "no_prefix":
-            return jsonify({"error": "no_prefix", "message": f"Brand '{brand}' has no SKU Prefix set in the Brands table."}), 404
+            return jsonify({"error": "no_prefix", "message": f"Brand '{brand}' has no SKU Prefix set."}), 404
 
         if result["status"] != "ok":
-            return jsonify({"error": "Failed to create the Airtable record. Check the server logs for details."}), 502
+            return jsonify({"error": "Failed to create the record. Check the server logs for details."}), 502
 
         sku = result["sku"]
         db.update_skus([{"id": row_id, "sku": sku}])
@@ -480,43 +485,7 @@ def api_search():
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
-@app.route("/admin/inspect-competitor-db")
-@login_required
-def inspect_competitor_db():
-    url = os.environ.get("COMPETITOR_DATABASE_URL")
-    if not url:
-        return "COMPETITOR_DATABASE_URL not set.", 500
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
 
-    try:
-        conn = psycopg2.connect(url, connect_timeout=8)
-        cur = conn.cursor()
-        output_lines = []
-        for t in ("item_master", "brand_sku"):
-            cur.execute("""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name=%s ORDER BY ordinal_position;
-            """, (t,))
-            output_lines.append(f"TABLE: {t}")
-            for col_name, col_type, nullable, default in cur.fetchall():
-                output_lines.append(f"    {col_name} ({col_type}) nullable={nullable} default={default}")
-
-            cur.execute("""
-                SELECT a.attname
-                FROM pg_index i
-                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-                WHERE i.indrelid = %s::regclass AND i.indisprimary;
-            """, (t,))
-            pk = [r[0] for r in cur.fetchall()]
-            output_lines.append(f"    PRIMARY KEY: {pk}")
-            output_lines.append("")
-
-        conn.close()
-        return "<pre>" + "\n".join(output_lines) + "</pre>"
-    except Exception as e:
-        return f"Connection failed: {e}", 500
 
 @app.route("/health")
 def health():

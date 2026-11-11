@@ -63,7 +63,7 @@ the "Full reset" JS block further down.
       <tr>
         <th class="checkbox-cell"><input type="checkbox" class="select-all" data-table="{{ table_name }}"></th>
         {% for c in columns %}<th>{{ labels.get(c, c) }}</th>{% endfor %}
-        {% if table_name == 'master_table' %}<th>Airtable</th>{% endif %}
+        {% if table_name == 'master_table' %}<th>Generate SKU</th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -89,7 +89,7 @@ the "Full reset" JS block further down.
               data-name="{{ row.name or '' }}"
               data-size="{{ row.size or '' }}"
               data-concentration="{{ row.concentration or '' }}"
-              data-gender="{{ row.gender or '' }}">Save to Airtable</button>
+              data-gender="{{ row.gender or '' }}">Generate SKU</button>
             {% endif %}
           </td>
         {% endif %}
