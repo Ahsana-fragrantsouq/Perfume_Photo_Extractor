@@ -4,7 +4,9 @@ import json
 import re
 import io
 from functools import wraps
+from datetime import timedelta
 
+from flask import send_from_directory
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from werkzeug.security import check_password_hash
 from PIL import Image
@@ -26,6 +28,21 @@ pillow_heif.register_heif_opener()
 app = Flask(__name__)
 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-insecure-key-change-in-render")
+# ---------------------------------------------------------------
+# LOGIN MEMORY: keep users logged in for 1 year.
+# The year restarts every time the app is used, so a phone that
+# opens the app at least once a year never sees the login page.
+# ---------------------------------------------------------------
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=365)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+print("[startup] Login sessions will last 365 days", flush=True)
+
+if not os.environ.get("FLASK_SECRET_KEY"):
+    print("[startup] WARNING: FLASK_SECRET_KEY not set on Render - using insecure dev key!", flush=True)
+else:
+    print("[startup] FLASK_SECRET_KEY is set", flush=True)
+
+
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -40,18 +57,23 @@ except Exception as e:
 
 
 def login_required(view_func):
+    """For PAGES. If not logged in, send to the login page, then back here after."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
+            print(f"[auth] Not logged in -> redirecting {request.path} to login page", flush=True)
             return redirect(url_for("login", next=request.path))
+        print(f"[auth] '{session.get('username')}' opened page {request.path}", flush=True)
         return view_func(*args, **kwargs)
     return wrapped
 
 
 def api_login_required(view_func):
+    """For BUTTONS / API calls (extract, save, delete...). If not logged in, return an error instead of a page."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
+            print(f"[auth] BLOCKED api call {request.path} - not logged in", flush=True)
             return jsonify({"error": "not_logged_in", "message": "Please log in again."}), 401
         return view_func(*args, **kwargs)
     return wrapped
@@ -60,31 +82,50 @@ def api_login_required(view_func):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
+
+    # Already logged in (e.g. app reopened)? Skip the login page entirely.
+    if request.method == "GET" and session.get("user_id"):
+        next_url = request.args.get("next") or url_for("index")
+        print(f"[login] '{session.get('username')}' already logged in -> skipping login page, going to {next_url}", flush=True)
+        return redirect(next_url)
+
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password", "")
+        print(f"[login] Login attempt for '{username}'", flush=True)  # password is never printed
 
         user = None
         try:
             user = db.get_user_by_username(username)
         except Exception as e:
             error = f"Could not check login right now: {e}"
+            print(f"[login] ERROR checking database: {e}", flush=True)
 
         if user and check_password_hash(user["password_hash"], password):
             session["user_id"] = user["id"]
             session["username"] = user["username"]
+            session.permanent = True  # remember this device for 365 days
             next_url = request.args.get("next") or url_for("index")
+            print(f"[login] SUCCESS '{username}' - remembered for 365 days, going to {next_url}", flush=True)
             return redirect(next_url)
         elif not error:
             error = "Incorrect username or password."
+            print(f"[login] FAILED '{username}' - wrong username or password", flush=True)
 
-    return render_template("login.html", error=error)
+        # Phone app pages live under /m/ -> show the phone login; otherwise the laptop login
+    is_phone = (request.args.get("next") or "").startswith("/m")
+    template = "m_login.html" if is_phone else "login.html"
+    print(f"[login] Showing {'phone' if is_phone else 'laptop'} login page", flush=True)
+    return render_template(template, error=error)
 
 
 @app.route("/logout")
 def logout():
+    print(f"[logout] '{session.get('username')}' logged out - login page will show next time", flush=True)
     session.clear()
-    return redirect(url_for("login"))
+    # Phone logout sends ?next=/m/ so the phone login page shows, and you land back on the camera
+    next_url = request.args.get("next")
+    return redirect(url_for("login", next=next_url) if next_url else url_for("login"))
 
 
 @app.route("/")
@@ -523,6 +564,77 @@ def inspect_competitor_db():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
+
+# ---------------------------------------------------------------
+# PHONE APP: camera -> shop name -> extract (windows 1 and 2).
+# Uses the same /extract and /api/shop-names as the laptop page.
+# ---------------------------------------------------------------
+@app.route("/m/")
+@login_required
+def mobile_app():
+    print(f"[m] Phone app opened by '{session.get('username')}' (camera screen)", flush=True)
+    return render_template("m_app.html")
+
+# ---------------------------------------------------------------
+# PHONE APP: Saved data (Master / Recorded / Corrections tabs).
+# Same data as /admin/data; buttons use the same /admin/... routes.
+# ---------------------------------------------------------------
+def _plain_rows(rows):
+    """Turn database rows into plain dicts the phone page can read (dates -> text)."""
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k, v in d.items():
+            if hasattr(v, "isoformat"):
+                d[k] = v.isoformat()
+        out.append(d)
+    return out
+
+
+@app.route("/m/data")
+@login_required
+def mobile_data():
+    try:
+        master_items = db.get_master_items(limit=500)
+    except Exception as e:
+        print(f"[m-data] ERROR loading saved data: {e}", flush=True)
+        return f"Database error: {str(e)}", 502
+
+    print(f"[m-data] Saved data opened | master {len(master_items)} item(s)", flush=True)
+    return render_template("m_data.html", master_items=_plain_rows(master_items))
+
+# search page
+# ---------------------------------------------------------------
+# PHONE APP: Search (same /api/search as the laptop search page).
+# ---------------------------------------------------------------
+@app.route("/m/search")
+@login_required
+def mobile_search():
+    print(f"[m-search] Search screen opened by '{session.get('username')}'", flush=True)
+    return render_template("m_search.html")
+
+# icon
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(app.static_folder, "icons/icon-192.png", mimetype="image/png")
+
+@app.route('/sw.js')
+def service_worker():
+    path = os.path.join(app.static_folder, 'sw.js')
+    print(f"[PWA] /sw.js requested | exists={os.path.exists(path)}", flush=True)
+    resp = send_from_directory(app.static_folder, 'sw.js', mimetype='application/javascript')
+    resp.headers['Cache-Control'] = 'no-cache'
+    print(f"[PWA] /sw.js served | status={resp.status_code}", flush=True)
+    return resp
+
+@app.route('/manifest.webmanifest')
+def manifest():
+    path = os.path.join(app.static_folder, 'manifest.webmanifest')
+    print(f"[PWA] /manifest.webmanifest requested | exists={os.path.exists(path)}", flush=True)
+    resp = send_from_directory(app.static_folder, 'manifest.webmanifest',
+                               mimetype='application/manifest+json')
+    print(f"[PWA] /manifest.webmanifest served | status={resp.status_code}", flush=True)
+    return resp
 
 
 if __name__ == "__main__":
