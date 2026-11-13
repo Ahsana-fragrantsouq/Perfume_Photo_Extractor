@@ -489,7 +489,22 @@ $('shutterBtn').addEventListener('click', async () => {
   if (!video.videoWidth) { warn('photo', 'Camera not ready yet'); return; }
   log('photo', 'Shutter pressed');
   try {
-    const blob = await canvasToJpeg(video, video.videoWidth, video.videoHeight);
+    let blob = null;
+    // Best quality: ask the camera for a full-resolution still (Chrome on Android).
+    // Falls back to grabbing a frame from the live video (iPhone / older browsers).
+    try {
+      const track = stream && stream.getVideoTracks()[0];
+      if (track && 'ImageCapture' in window) {
+        const still = await new ImageCapture(track).takePhoto();
+        const bmp = await createImageBitmap(still, { imageOrientation: 'from-image' });
+        log('photo', `Full-resolution still: ${bmp.width}x${bmp.height}`);
+        blob = await canvasToJpeg(bmp, bmp.width, bmp.height);
+        bmp.close();
+      }
+    } catch (err) {
+      warn('photo', 'Full-resolution capture not available, using video frame:', err.message);
+    }
+    if (!blob) blob = await canvasToJpeg(video, video.videoWidth, video.videoHeight);
     showW2(blob, 'camera');
   } catch (err) {
     warn('photo', 'Capture failed:', err);
