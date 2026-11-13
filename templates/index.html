@@ -81,6 +81,11 @@
   <label for="photo">Photo</label>
   <input type="file" id="photo" name="photo" accept="image/*" required>
 
+  <!-- Opens the phone's camera directly. The photo is then handed to the normal
+       #photo input above, so the rest of the page works exactly the same. -->
+  <button type="button" id="cameraBtn" class="secondary" style="margin-top:10px;">📷 Take photo with camera</button>
+  <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
+
   <button type="submit" id="submitBtn">Extract items</button>
   <div id="status"></div>
 </form>
@@ -144,6 +149,24 @@ fieldOptionsPromise.then(options => {
       .map(val => `<option value="${escapeHtml(val)}"></option>`)
       .join("");
   });
+});
+
+// "Take photo" button: open the camera, then copy the captured photo into the
+// regular #photo input (which is what the Extract button reads from).
+const cameraBtn = document.getElementById("cameraBtn");
+const cameraInput = document.getElementById("cameraInput");
+const photoInput = document.getElementById("photo");
+
+cameraBtn.addEventListener("click", () => cameraInput.click());
+cameraInput.addEventListener("change", () => {
+  const file = cameraInput.files[0];
+  if (!file) return;
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  photoInput.files = transfer.files;
+  statusEl.textContent = "Photo ready — tap Extract items.";
+  statusEl.className = "";
+  cameraInput.value = "";
 });
 
 form.addEventListener("submit", async (e) => {
