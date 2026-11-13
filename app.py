@@ -7,7 +7,7 @@ from functools import wraps
 
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from werkzeug.security import check_password_hash
-from PIL import Image
+from PIL import Image, ImageOps
 import pillow_heif
 import anthropic
 import psycopg2
@@ -140,27 +140,44 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-MAX_DIMENSION = 1568
+# Two versions of every uploaded photo:
+#  - the "AI" copy sent to Claude: 1568px is the most detail Claude can use anyway
+#    (anything bigger gets shrunk by the API), and smaller uploads are faster/cheaper.
+#  - the "storage" copy saved to Cloudinary and shown under "View photo": much
+#    higher resolution + quality, so you can zoom in and read small label text.
+AI_MAX_DIMENSION = 1568
+AI_START_QUALITY = 85
+
+STORAGE_MAX_DIMENSION = 4000
+STORAGE_START_QUALITY = 95
+STORAGE_MAX_BYTES = 9 * 1024 * 1024  # stay under Cloudinary's 10MB free-plan file limit
+
 MAX_BASE64_BYTES = 10 * 1024 * 1024
 
 
-def compress_image(image_bytes):
+def compress_image(image_bytes, max_dimension, start_quality, max_bytes=None):
+    """Opens the image, fixes phone rotation, shrinks it so its longest side is at
+    most max_dimension (never enlarges), and saves as JPEG — lowering quality in
+    steps only if the file is still over max_bytes. Returns (bytes, media_type)."""
     img = Image.open(io.BytesIO(image_bytes))
+    img = ImageOps.exif_transpose(img)  # phones store rotation in metadata; apply it
     img = img.convert("RGB")
 
-    if max(img.size) > MAX_DIMENSION:
-        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
+    if max(img.size) > max_dimension:
+        img.thumbnail((max_dimension, max_dimension), Image.LANCZOS)
 
-    quality = 85
-    while quality >= 40:
+    print(f"[compress] Output size {img.size[0]}x{img.size[1]}, starting quality {start_quality}")
+
+    quality = start_quality
+    while True:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality, optimize=True)
         data = buf.getvalue()
-        if len(data) * 4 / 3 < MAX_BASE64_BYTES:
+        too_big = max_bytes is not None and len(data) > max_bytes
+        if not too_big or quality <= 60:
+            print(f"[compress] Final quality {quality}, {len(data) / 1024:.0f} KB")
             return data, "image/jpeg"
-        quality -= 15
-
-    return data, "image/jpeg"
+        quality -= 5
 
 
 def extract_json(text):
@@ -218,7 +235,14 @@ def extract():
     try:
         image_bytes = photo.read()
         try:
-            compressed_bytes, media_type = compress_image(image_bytes)
+            # Small copy for Claude (token/size limits)
+            compressed_bytes, media_type = compress_image(
+                image_bytes, AI_MAX_DIMENSION, AI_START_QUALITY, MAX_BASE64_BYTES * 3 // 4
+            )
+            # Large, high-quality copy for the saved "View photo" link
+            storage_bytes, _ = compress_image(
+                image_bytes, STORAGE_MAX_DIMENSION, STORAGE_START_QUALITY, STORAGE_MAX_BYTES
+            )
         except Exception:
             return jsonify({
                 "error": "This file couldn't be read as an image. This can happen if a phone saved it in "
@@ -269,7 +293,7 @@ def extract():
         except Exception as e:
             print(f"[extract] Warning: could not save raw items to recorded_items: {e}")
 
-        image_url = photo_storage.upload_image(compressed_bytes)
+        image_url = photo_storage.upload_image(storage_bytes)
 
         return jsonify({
             "shop_name": shop_name,
