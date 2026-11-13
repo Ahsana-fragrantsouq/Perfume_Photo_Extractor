@@ -511,6 +511,81 @@ def api_search():
 
 
 
+# ---------------------------------------------------------------------------
+# PWA ("Install app" on phones). Chrome only offers a real install when the site
+# has a web app manifest + icons + a service worker. We serve those here, and
+# inject the matching <head> tags into every page automatically, so none of the
+# HTML templates need editing.
+# ---------------------------------------------------------------------------
+
+PWA_MANIFEST = {
+    "name": "Perfume Photo Extractor",
+    "short_name": "Perfume Extractor",
+    "description": "Upload shelf photos and extract perfume details.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#111111",
+    "theme_color": "#111111",
+    "icons": [
+        {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
+
+# Does nothing except pass requests straight to the network — no caching, so you
+# always see fresh data and never get stuck on an old version of the app. Chrome
+# just needs a service worker with a fetch handler to treat the site as installable.
+SERVICE_WORKER_JS = """
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (event) => { event.respondWith(fetch(event.request)); });
+"""
+
+PWA_HEAD_TAGS = (
+    '<link rel="manifest" href="/manifest.json">'
+    '<meta name="theme-color" content="#111111">'
+    '<link rel="apple-touch-icon" href="/static/icons/icon-192.png">'
+    "<script>if('serviceWorker' in navigator){"
+    "window.addEventListener('load',function(){navigator.serviceWorker.register('/service-worker.js');});}"
+    "</script>"
+)
+
+# Without this tag phones show the page as a tiny zoomed-out desktop site.
+# Delete this constant (and its use below) if it makes any page look worse.
+VIEWPORT_TAG = '<meta name="viewport" content="width=device-width, initial-scale=1">'
+
+
+@app.route("/manifest.json")
+def pwa_manifest():
+    response = jsonify(PWA_MANIFEST)
+    response.mimetype = "application/manifest+json"
+    return response
+
+
+@app.route("/service-worker.js")
+def pwa_service_worker():
+    # Must be served from the site root so it can control every page.
+    response = app.response_class(SERVICE_WORKER_JS, mimetype="application/javascript")
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.after_request
+def add_pwa_tags(response):
+    """Inserts the PWA tags just before </head> on every HTML page."""
+    if response.mimetype == "text/html" and not response.direct_passthrough:
+        html = response.get_data(as_text=True)
+        if "</head>" in html and 'rel="manifest"' not in html:
+            tags = PWA_HEAD_TAGS
+            if 'name="viewport"' not in html:
+                tags = VIEWPORT_TAG + tags
+            response.set_data(html.replace("</head>", tags + "</head>", 1))
+    return response
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
