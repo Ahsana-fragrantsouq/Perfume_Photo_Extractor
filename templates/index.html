@@ -44,6 +44,18 @@
   .top-bar .top-right-links a:hover { background: #111; color: #fff; }
   .top-bar a.logout-link { position: absolute; top: 4px; left: 0; font-size: 13px; color: #666; text-decoration: none; }
   .top-bar a.logout-link:hover { text-decoration: underline; }
+  #results { overflow-x: auto; }   /* wide results table scrolls sideways instead of squashing */
+
+  /* Phones: the title and the 3 links can't share one row, so put Log out on the
+     left and Search/Saved items on the right in the first row, title below. */
+  @media (max-width: 700px) {
+    body { margin: 16px auto; }
+    .top-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
+    .top-bar a.logout-link, .top-bar .top-right-links { position: static; }
+    .top-bar > div:nth-child(2) { order: 3; width: 100%; }
+    .top-bar .top-right-links a { padding: 6px 10px; font-size: 13px; }
+    #itemsTable { min-width: 760px; }
+  }
 </style>
 </head>
 <body>

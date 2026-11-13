@@ -27,6 +27,13 @@
   .status-msg { margin-top: 10px; font-size: 13px; }
   .status-ok { color: #1a7a1a; }
   .status-error { color: #b00020; }
+  .table-scroll { overflow-x: auto; }   /* wide tables scroll sideways on phones */
+
+  @media (max-width: 700px) {
+    body { margin: 12px; }
+    .table-actions { flex-wrap: wrap; }
+    .table-scroll table { min-width: 1000px; }
+  }
 </style>
 </head>
 <body>
@@ -58,6 +65,7 @@ the "Full reset" JS block further down.
     {% endif %}
     <div id="status-{{ table_name }}" class="status-msg"></div>
   </div>
+  <div class="table-scroll">
   <table id="table-{{ table_name }}">
     <thead>
       <tr>
@@ -97,6 +105,7 @@ the "Full reset" JS block further down.
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p>No rows yet.</p>
   {% endif %}
