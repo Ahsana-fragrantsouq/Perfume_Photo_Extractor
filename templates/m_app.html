@@ -261,8 +261,8 @@
      [PWA]     service worker / install
    ================================================================= */
 
-const MAX_SIDE = 1568;      // same limit the server uses; Claude reads this size best
-const JPEG_QUALITY = 0.85;
+const MAX_SIDE = 3000;      // keep shelf text readable; the server makes its own smaller copy for Claude
+const JPEG_QUALITY = 0.92;
 const LOGIN_URL = '/login?next=/m/';
 
 const $ = (id) => document.getElementById(id);
@@ -341,7 +341,7 @@ let backCams = [];      // back cameras, main first
 let camIndex = 0;       // which one is open now
 
 function openStream(deviceId) {
-  const size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const size = { width: { ideal: 3840 }, height: { ideal: 2160 } };
   const video = deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: { ideal: 'environment' }, ...size };
   return navigator.mediaDevices.getUserMedia({ audio: false, video });
 }

@@ -119,7 +119,7 @@
    Recorded and Corrections are only shown on the laptop page.
      Delete selected  -> POST /admin/delete
      Update SKUs      -> POST /admin/update-sku
-     Save to Airtable -> POST /admin/create-in-airtable
+     Generate SKU -> POST /admin/create-in-airtable
    Log tag: [data]
    ================================================================= */
 
@@ -186,7 +186,7 @@ function masterCard(r) {
         <div class="card-actions">
           ${r.image_url ? `<a class="photo-link" href="${esc(r.image_url)}" target="_blank" rel="noopener">View photo</a>` : '<span></span>'}
           ${r.sku ? '<span class="matched">SKU matched</span>'
-                  : `<button type="button" class="airtable-btn" data-id="${r.id}">Save to Airtable</button>`}
+                  : `<button type="button" class="airtable-btn" data-id="${r.id}">Generate SKU</button>`}
         </div>
         <div class="when">${when(r.updated_at)}</div>
       </div>
@@ -319,7 +319,7 @@ $('updateSkusBtn').addEventListener('click', async () => {
   } finally { refreshButtons(); }
 });
 
-/* ------------------------- Save to Airtable ------------------------- */
+/* ------------------------- Generate SKU ------------------------- */
 
 $('list').addEventListener('click', async (e) => {
   const btn = e.target.closest('.airtable-btn');
@@ -330,7 +330,7 @@ $('list').addEventListener('click', async (e) => {
     id, brand: row.brand || '', name: row.name || '', size: row.size || '',
     concentration: row.concentration || '', gender: row.gender || '',
   };
-  log(`Save to Airtable #${id}:`, body);
+  log(`Generate SKU #${id}:`, body);
   btn.disabled = true;
   btn.textContent = 'Saving…';
   try {
@@ -343,27 +343,27 @@ $('list').addEventListener('click', async (e) => {
     if (!res.ok) {
       if (data.error === 'no_brand' || data.error === 'no_prefix') {
         warn(`Airtable #${id}: ${data.error} - ${data.message}`);
-        btn.textContent = data.error === 'no_brand' ? 'Brand not in Airtable' : 'No SKU prefix set';
+        btn.textContent = data.error === 'no_brand' ? 'Brand not found' : 'No SKU prefix set';
         setMsg(data.message || '', 'error');
         return;   // stays disabled, same as the laptop
       }
       warn(`Airtable #${id} failed:`, data);
       setMsg(data.error || `Airtable save failed (status ${res.status}).`, 'error');
       btn.disabled = false;
-      btn.textContent = 'Save to Airtable';
+      btn.textContent = 'Generate SKU';
       return;
     }
 
     row.sku = data.sku;
     delete skuEdits[id];
     log(`Airtable #${id} created | SKU ${data.sku}`);
-    setMsg(`Created in Airtable with SKU ${data.sku}.`, 'ok');
+    setMsg(`SKU generated with SKU ${data.sku}.`, 'ok');
     render();
   } catch (err) {
     warn(`Airtable #${id} error:`, err.message);
     setMsg('Connection lost while saving to Airtable. Try again.', 'error');
     btn.disabled = false;
-    btn.textContent = 'Save to Airtable';
+    btn.textContent = 'Generate SKU';
   }
 });
 

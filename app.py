@@ -78,19 +78,58 @@ def login():
         elif not error:
             error = "Incorrect username or password."
 
-    return render_template("login.html", error=error)
+    next_url = request.args.get("next") or ""
+    use_phone_page = next_url.startswith("/m") or is_phone()
+    print(f"[login] Showing {'phone' if use_phone_page else 'desktop'} login page")
+    return render_template("m_login.html" if use_phone_page else "login.html", error=error)
 
 
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    next_url = request.args.get("next")
+    return redirect(url_for("login", next=next_url) if next_url else url_for("login"))
+
+
+def is_phone():
+    """True when the request comes from a phone (Android / iPhone / iPod)."""
+    ua = (request.headers.get("User-Agent") or "").lower()
+    return any(k in ua for k in ("android", "iphone", "ipod")) and "ipad" not in ua
 
 
 @app.route("/")
 @login_required
 def index():
+    # Phones open the camera-first app; add ?desktop=1 to force the normal page.
+    if is_phone() and request.args.get("desktop") != "1":
+        print("[index] Phone detected -> redirecting to /m/")
+        return redirect("/m/")
     return render_template("index.html")
+
+
+@app.route("/m/")
+@login_required
+def phone_app():
+    print("[m] Serving phone camera app")
+    return render_template("m_app.html")
+
+
+@app.route("/m/search")
+@login_required
+def phone_search():
+    print("[m] Serving phone search page")
+    return render_template("m_search.html")
+
+
+@app.route("/m/data")
+@login_required
+def phone_data():
+    print("[m] Serving phone saved-data page")
+    try:
+        master_items = db.get_master_items(limit=500)
+    except Exception as e:
+        return f"Database error: {str(e)}", 502
+    return render_template("m_data.html", master_items=master_items)
 
 
 EXTRACTION_PROMPT_BASE = """You are looking at a photo of perfumes/fragrances taken inside a shop.
@@ -519,10 +558,10 @@ def api_search():
 # ---------------------------------------------------------------------------
 
 PWA_MANIFEST = {
-    "name": "Perfume Photo Extractor",
-    "short_name": "Perfume Extractor",
+    "name": "FS Extractor",
+    "short_name": "FS Extractor",
     "description": "Upload shelf photos and extract perfume details.",
-    "start_url": "/",
+    "start_url": "/m/",
     "scope": "/",
     "display": "standalone",
     "orientation": "portrait",
@@ -559,6 +598,7 @@ VIEWPORT_TAG = '<meta name="viewport" content="width=device-width, initial-scale
 
 
 @app.route("/manifest.json")
+@app.route("/manifest.webmanifest")
 def pwa_manifest():
     response = jsonify(PWA_MANIFEST)
     response.mimetype = "application/manifest+json"
@@ -566,6 +606,7 @@ def pwa_manifest():
 
 
 @app.route("/service-worker.js")
+@app.route("/sw.js")
 def pwa_service_worker():
     # Must be served from the site root so it can control every page.
     response = app.response_class(SERVICE_WORKER_JS, mimetype="application/javascript")
