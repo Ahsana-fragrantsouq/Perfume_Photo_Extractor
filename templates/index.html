@@ -18,14 +18,14 @@
   table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; table-layout: fixed; }
   th, td { border: 1px solid #ddd; padding: 6px; text-align: left; overflow: hidden; text-overflow: ellipsis; }
   th { background: #f5f5f5; }
-  #itemsTable th:nth-child(1), #itemsTable td:nth-child(1) { width: 28px; }   /* checkbox */
-  #itemsTable th:nth-child(2), #itemsTable td:nth-child(2) { width: 15%; }    /* Brand */
-  #itemsTable th:nth-child(3), #itemsTable td:nth-child(3) { width: 24%; }    /* Name — the one that was getting cut off */
-  #itemsTable th:nth-child(4), #itemsTable td:nth-child(4) { width: 9%; }     /* Size */
-  #itemsTable th:nth-child(5), #itemsTable td:nth-child(5) { width: 14%; }    /* Concentration */
-  #itemsTable th:nth-child(6), #itemsTable td:nth-child(6) { width: 9%; }     /* Gender */
-  #itemsTable th:nth-child(7), #itemsTable td:nth-child(7) { width: 9%; }     /* Condition */
-  #itemsTable th:nth-child(8), #itemsTable td:nth-child(8) { width: 8%; }     /* Confidence */
+  .itemsTable th:nth-child(1), .itemsTable td:nth-child(1) { width: 28px; }   /* checkbox */
+  .itemsTable th:nth-child(2), .itemsTable td:nth-child(2) { width: 15%; }    /* Brand */
+  .itemsTable th:nth-child(3), .itemsTable td:nth-child(3) { width: 24%; }    /* Name — the one that was getting cut off */
+  .itemsTable th:nth-child(4), .itemsTable td:nth-child(4) { width: 9%; }     /* Size */
+  .itemsTable th:nth-child(5), .itemsTable td:nth-child(5) { width: 14%; }    /* Concentration */
+  .itemsTable th:nth-child(6), .itemsTable td:nth-child(6) { width: 9%; }     /* Gender */
+  .itemsTable th:nth-child(7), .itemsTable td:nth-child(7) { width: 9%; }     /* Condition */
+  .itemsTable th:nth-child(8), .itemsTable td:nth-child(8) { width: 8%; }     /* Confidence */
   td input[type="text"] { border: 1px solid transparent; background: transparent; padding: 4px; font-size: 13px; width: 100%; box-sizing: border-box; border-radius: 4px; }
   td input[type="text"]:hover { border-color: #ccc; }
   td input[type="text"]:focus { border-color: #111; background: #fff; outline: none; }
@@ -34,6 +34,12 @@
   tr.row-saved { background: #f0fdf4; }
   tr.row-saved td.checkbox-cell::after { content: "✓"; color: #1a7a1a; font-size: 11px; display: block; }
   .error { color: #b00020; margin-top: 14px; }
+  .batch { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-top: 24px; }
+  .batch-head { display: flex; gap: 14px; align-items: center; }
+  .batch-head img { width: 90px; height: 90px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd; cursor: zoom-in; }
+  .batch-head h3 { margin: 0 0 4px 0; font-size: 15px; }
+  .batch-status { font-size: 14px; color: #666; }
+  #fileList { margin-top: 8px; font-size: 13px; color: #666; }
   .confidence-low { color: #b00020; }
   .confidence-medium { color: #a67c00; }
   .confidence-high { color: #1a7a1a; }
@@ -44,7 +50,8 @@
   .top-bar .top-right-links a:hover { background: #111; color: #fff; }
   .top-bar a.logout-link { position: absolute; top: 4px; left: 0; font-size: 13px; color: #666; text-decoration: none; }
   .top-bar a.logout-link:hover { text-decoration: underline; }
-  #results { overflow-x: auto; }   /* wide results table scrolls sideways instead of squashing */
+  #results { overflow-x: auto; }
+  .batch-table-wrap { overflow-x: auto; }   /* wide results table scrolls sideways instead of squashing */
 
   /* Phones: the title and the 3 links can't share one row, so put Log out on the
      left and Search/Saved items on the right in the first row, title below. */
@@ -54,7 +61,7 @@
     .top-bar a.logout-link, .top-bar .top-right-links { position: static; }
     .top-bar > div:nth-child(2) { order: 3; width: 100%; }
     .top-bar .top-right-links a { padding: 6px 10px; font-size: 13px; }
-    #itemsTable { min-width: 760px; }
+    .itemsTable { min-width: 760px; }
   }
 </style>
 </head>
@@ -78,13 +85,13 @@
   <input type="text" id="shop_name" name="shop_name" list="shopNameOptions" placeholder="e.g. Al Haramain Dubai Mall" autocomplete="off" required>
   <datalist id="shopNameOptions"></datalist>
 
-  <label for="photo">Photo</label>
-  <input type="file" id="photo" name="photo" accept="image/*" required>
+  <label for="photo">Photos</label>
+  <input type="file" id="photo" name="photo" accept="image/*" multiple>
 
-  <!-- Opens the phone's camera directly. The photo is then handed to the normal
-       #photo input above, so the rest of the page works exactly the same. -->
+  <!-- Opens the phone's camera directly. The photo is added to the list of selected photos. -->
   <button type="button" id="cameraBtn" class="secondary" style="margin-top:10px;">📷 Take photo with camera</button>
   <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
+  <div id="fileList"></div>
 
   <button type="submit" id="submitBtn">Extract items</button>
   <div id="status"></div>
@@ -98,122 +105,144 @@
 <script>
 const FIELDS = ["brand", "name", "size", "concentration", "gender", "condition"];
 const FIELD_LABELS = { brand: "Brand", name: "Name", size: "Size", concentration: "Concentration", gender: "Gender", condition: "Condition" };
+const AUTOCOMPLETE_FIELDS = ["concentration", "gender", "condition"];
 
 const form = document.getElementById("uploadForm");
 const statusEl = document.getElementById("status");
 const resultsEl = document.getElementById("results");
 const submitBtn = document.getElementById("submitBtn");
+const photoInput = document.getElementById("photo");
+const cameraBtn = document.getElementById("cameraBtn");
+const cameraInput = document.getElementById("cameraInput");
+const fileListEl = document.getElementById("fileList");
 
-let currentShopName = "";
-let currentImageUrl = null;   // filled in from /extract's response, sent back to /record
-let originalItems = [];   // exactly what Claude returned, never mutated
-let savedSnapshots = {};  // row index (string) -> the corrected values as of its last successful save; absent = never saved
+let selectedFiles = [];   // every photo waiting to be extracted
 
-// Fields that get an autocomplete dropdown in the results table (built from
-// every value ever used, but still freely editable for new/unseen values)
-const AUTOCOMPLETE_FIELDS = ["concentration", "gender", "condition"];
-
-// Populate the Shop name autocomplete list with every shop used before
+// Shop name autocomplete
 (async function loadShopNames() {
   try {
     const res = await fetch("/api/shop-names");
-    if (!res.ok) return; // fail quietly — typing still works without the list
+    if (!res.ok) return;
     const data = await res.json();
-    const datalist = document.getElementById("shopNameOptions");
-    datalist.innerHTML = (data.shop_names || [])
-      .map(name => `<option value="${escapeHtml(name)}"></option>`)
-      .join("");
-  } catch (err) {
-    // Autocomplete is a convenience, not a requirement — say nothing if it fails
-  }
+    document.getElementById("shopNameOptions").innerHTML = (data.shop_names || [])
+      .map(name => `<option value="${escapeHtml(name)}"></option>`).join("");
+  } catch (err) { /* autocomplete is optional */ }
 })();
 
-// Populate Concentration/Gender/Condition autocomplete lists, used once the
-// results table renders. Fetched once up front so it's ready by the time
-// items are extracted (rather than re-fetching per photo).
-let fieldOptionsPromise = (async () => {
+// Concentration / Gender / Condition autocomplete lists
+(async () => {
   try {
     const res = await fetch("/api/field-options");
-    if (!res.ok) return {};
-    return await res.json();
-  } catch (err) {
-    return {}; // same as above — table still works without suggestions
-  }
+    if (!res.ok) return;
+    const options = await res.json();
+    AUTOCOMPLETE_FIELDS.forEach(f => {
+      document.getElementById(`${f}Options`).innerHTML = (options[f] || [])
+        .map(val => `<option value="${escapeHtml(val)}"></option>`).join("");
+    });
+  } catch (err) { /* optional */ }
 })();
 
-fieldOptionsPromise.then(options => {
-  AUTOCOMPLETE_FIELDS.forEach(f => {
-    const datalist = document.getElementById(`${f}Options`);
-    if (!datalist) return;
-    datalist.innerHTML = (options[f] || [])
-      .map(val => `<option value="${escapeHtml(val)}"></option>`)
-      .join("");
-  });
+function refreshFileList() {
+  fileListEl.textContent = selectedFiles.length
+    ? `${selectedFiles.length} photo(s) selected: ` + selectedFiles.map(f => f.name).join(", ")
+    : "";
+  console.log(`[upload] ${selectedFiles.length} photo(s) selected`);
+}
+
+// "Choose files" replaces the selection; the camera button adds one more photo
+photoInput.addEventListener("change", () => {
+  selectedFiles = Array.from(photoInput.files);
+  refreshFileList();
 });
-
-// "Take photo" button: open the camera, then copy the captured photo into the
-// regular #photo input (which is what the Extract button reads from).
-const cameraBtn = document.getElementById("cameraBtn");
-const cameraInput = document.getElementById("cameraInput");
-const photoInput = document.getElementById("photo");
-
 cameraBtn.addEventListener("click", () => cameraInput.click());
 cameraInput.addEventListener("change", () => {
   const file = cameraInput.files[0];
   if (!file) return;
-  const transfer = new DataTransfer();
-  transfer.items.add(file);
-  photoInput.files = transfer.files;
-  statusEl.textContent = "Photo ready — tap Extract items.";
-  statusEl.className = "";
+  selectedFiles.push(file);
+  refreshFileList();
+  statusEl.textContent = "Photo added — tap Extract items.";
   cameraInput.value = "";
 });
 
+// Extract: each photo is sent on its own and gets its own result section
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (selectedFiles.length === 0) {
+    statusEl.textContent = "Please choose at least one photo.";
+    return;
+  }
+  const shopName = document.getElementById("shop_name").value.trim();
+  const files = selectedFiles.slice();
   resultsEl.innerHTML = "";
-  statusEl.textContent = "Analyzing photo... this can take 10-20 seconds.";
-  statusEl.className = "";
   submitBtn.disabled = true;
+  console.log(`[extract] Starting ${files.length} photo(s) for shop "${shopName}"`);
 
-  currentShopName = document.getElementById("shop_name").value.trim();
+  // Create all sections first so you can see the whole queue
+  const batches = files.map((file, i) => createBatchSection(file, i, files.length, shopName));
+
+  for (let i = 0; i < files.length; i++) {
+    statusEl.textContent = `Analyzing photo ${i + 1} of ${files.length}... this can take 10-20 seconds each.`;
+    await extractBatch(batches[i], files[i]);
+  }
+  statusEl.textContent = `Done — ${files.length} photo(s) processed. Review each photo's items below.`;
+  submitBtn.disabled = false;
+});
+
+function createBatchSection(file, index, total, shopName) {
+  const el = document.createElement("div");
+  el.className = "batch";
+  const thumbUrl = URL.createObjectURL(file);
+  el.innerHTML = `
+    <div class="batch-head">
+      <a href="${thumbUrl}" target="_blank"><img src="${thumbUrl}" alt=""></a>
+      <div>
+        <h3>Photo ${index + 1} of ${total}: ${escapeHtml(file.name)}</h3>
+        <div class="batch-status">Waiting...</div>
+      </div>
+    </div>
+    <div class="batch-body"></div>`;
+  resultsEl.appendChild(el);
+  return { el, shopName, imageUrl: null, originalItems: [], savedSnapshots: {} };
+}
+
+async function extractBatch(batch, file) {
+  const statusDiv = batch.el.querySelector(".batch-status");
+  const body = batch.el.querySelector(".batch-body");
+  statusDiv.textContent = "Analyzing photo...";
 
   const formData = new FormData();
-  formData.append("shop_name", currentShopName);
-  formData.append("photo", document.getElementById("photo").files[0]);
+  formData.append("shop_name", batch.shopName);
+  formData.append("photo", file);
 
   try {
     const res = await fetch("/extract", { method: "POST", body: formData });
     const data = await res.json();
-
     if (!res.ok) {
-      statusEl.textContent = "";
-      resultsEl.innerHTML = `<div class="error">Error: ${data.error || "Unknown error"}</div>`;
-      submitBtn.disabled = false;
+      statusDiv.textContent = "";
+      body.innerHTML = `<div class="error">Error: ${escapeHtml(data.error || "Unknown error")}</div>`;
+      console.log(`[extract] "${file.name}" failed:`, data.error);
       return;
     }
-
-    statusEl.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}". Review and correct below, then select which to record.`;
-    originalItems = data.items;
-    currentImageUrl = data.image_url ?? null;
-    savedSnapshots = {}; // fresh photo — nothing saved yet for this batch
-
-    renderTable(data.items);
+    console.log(`[extract] "${file.name}": ${data.item_count} item(s)`);
+    statusDiv.textContent = `Found ${data.item_count} item(s) at "${data.shop_name}". Review and correct below, then select which to record.`;
+    batch.originalItems = data.items;
+    batch.imageUrl = data.image_url ?? null;
+    renderTable(batch);
   } catch (err) {
-    statusEl.textContent = "";
-    resultsEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
-  } finally {
-    submitBtn.disabled = false;
+    statusDiv.textContent = "";
+    body.innerHTML = `<div class="error">Request failed: ${escapeHtml(err.message)}</div>`;
   }
-});
+}
 
-function renderTable(items) {
+function renderTable(batch) {
+  const body = batch.el.querySelector(".batch-body");
+  const items = batch.originalItems;
   if (items.length === 0) {
-    resultsEl.innerHTML = "<p>No items detected in this photo.</p>";
+    body.innerHTML = "<p>No items detected in this photo.</p>";
     return;
   }
 
-  let html = '<table id="itemsTable"><thead><tr><th></th>';
+  let html = '<div class="batch-table-wrap"><table class="itemsTable"><thead><tr><th></th>';
   FIELDS.forEach(f => html += `<th>${FIELD_LABELS[f]}</th>`);
   html += "<th>Confidence</th></tr></thead><tbody>";
 
@@ -227,43 +256,37 @@ function renderTable(items) {
     html += `<td class="confidence-${item.confidence ?? ''}">${item.confidence ?? "-"}</td></tr>`;
   });
 
-  html += "</tbody></table>";
+  html += "</tbody></table></div>";
   html += `
     <div class="actions">
-      <button id="saveBtn" type="button" disabled>Save selected items</button>
-      <button id="selectAllBtn" type="button" class="secondary">Select all</button>
-      <button id="deselectAllBtn" type="button" class="secondary">Deselect all</button>
+      <button class="saveBtn" type="button" disabled>Save selected items</button>
+      <button class="selectAllBtn" type="button" class="secondary">Select all</button>
+      <button class="deselectAllBtn" type="button" class="secondary">Deselect all</button>
     </div>
-    <div id="recordStatus"></div>
-  `;
+    <div class="recordStatus" style="margin-top:14px;font-size:14px;color:#666;"></div>`;
+  body.innerHTML = html;
+  body.querySelectorAll(".selectAllBtn, .deselectAllBtn").forEach(b => b.classList.add("secondary"));
 
-  resultsEl.innerHTML = html;
+  const refresh = () => refreshSaveButtonState(batch);
 
-  document.querySelectorAll(".field-input").forEach(input => {
+  body.querySelectorAll(".field-input").forEach(input => {
     const originalValue = input.value;
     input.addEventListener("input", () => {
       input.classList.toggle("edited", input.value !== originalValue);
       input.title = input.value;
-      refreshSaveButtonState();
+      refresh();
     });
   });
-
-  document.querySelectorAll(".row-select").forEach(cb => {
-    cb.addEventListener("change", refreshSaveButtonState);
+  body.querySelectorAll(".row-select").forEach(cb => cb.addEventListener("change", refresh));
+  body.querySelector(".selectAllBtn").addEventListener("click", () => {
+    body.querySelectorAll(".row-select").forEach(cb => cb.checked = true); refresh();
   });
-
-  document.getElementById("selectAllBtn").addEventListener("click", () => {
-    document.querySelectorAll(".row-select").forEach(cb => cb.checked = true);
-    refreshSaveButtonState();
+  body.querySelector(".deselectAllBtn").addEventListener("click", () => {
+    body.querySelectorAll(".row-select").forEach(cb => cb.checked = false); refresh();
   });
-  document.getElementById("deselectAllBtn").addEventListener("click", () => {
-    document.querySelectorAll(".row-select").forEach(cb => cb.checked = false);
-    refreshSaveButtonState();
-  });
-  document.getElementById("saveBtn").addEventListener("click", saveSelectedItems);
+  body.querySelector(".saveBtn").addEventListener("click", () => saveSelectedItems(batch));
 }
 
-// Current field values for a row, as an object keyed by field name
 function getRowCorrected(row) {
   const corrected = {};
   row.querySelectorAll(".field-input").forEach(input => {
@@ -272,75 +295,64 @@ function getRowCorrected(row) {
   return corrected;
 }
 
-// A row needs (re-)saving if it's checked AND either never saved before,
-// or its values have changed since the last time it was saved.
-function rowNeedsSaving(row) {
+// Checked AND (never saved, or edited since last save)
+function rowNeedsSaving(batch, row) {
   if (!row.querySelector(".row-select").checked) return false;
-  const i = row.dataset.row;
-  const saved = savedSnapshots[i];
+  const saved = batch.savedSnapshots[row.dataset.row];
   if (!saved) return true;
   return JSON.stringify(getRowCorrected(row)) !== JSON.stringify(saved);
 }
 
-function refreshSaveButtonState() {
-  const saveBtn = document.getElementById("saveBtn");
+function refreshSaveButtonState(batch) {
+  const saveBtn = batch.el.querySelector(".saveBtn");
   if (!saveBtn) return;
-  const rows = document.querySelectorAll("#itemsTable tbody tr");
-  const anyNeedsSaving = Array.from(rows).some(rowNeedsSaving);
-  saveBtn.disabled = !anyNeedsSaving;
+  const rows = batch.el.querySelectorAll(".itemsTable tbody tr");
+  saveBtn.disabled = !Array.from(rows).some(r => rowNeedsSaving(batch, r));
 }
 
-async function saveSelectedItems() {
-  const recordStatusEl = document.getElementById("recordStatus");
-  const saveBtn = document.getElementById("saveBtn");
-  const rows = document.querySelectorAll("#itemsTable tbody tr");
-
-  // Only rows that are checked AND (new or edited since their last save) get sent —
-  // this is what avoids re-saving duplicates for rows that are still checked but
-  // already saved unchanged.
-  const rowsToSave = Array.from(rows).filter(rowNeedsSaving);
+async function saveSelectedItems(batch) {
+  const recordStatusEl = batch.el.querySelector(".recordStatus");
+  const saveBtn = batch.el.querySelector(".saveBtn");
+  const rows = batch.el.querySelectorAll(".itemsTable tbody tr");
+  const rowsToSave = Array.from(rows).filter(r => rowNeedsSaving(batch, r));
 
   if (rowsToSave.length === 0) {
     recordStatusEl.textContent = "Nothing new to save.";
-    recordStatusEl.className = "";
     return;
   }
 
   const items = rowsToSave.map(row => {
     const i = parseInt(row.dataset.row, 10);
-    return { original: originalItems[i], corrected: getRowCorrected(row), selected: true };
+    return { original: batch.originalItems[i], corrected: getRowCorrected(row), selected: true };
   });
 
   saveBtn.disabled = true;
   recordStatusEl.textContent = "Saving...";
-  recordStatusEl.className = "";
+  console.log(`[save] Saving ${items.length} item(s) from one photo | image: ${batch.imageUrl}`);
 
   try {
     const res = await fetch("/record", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ shop_name: currentShopName, image_url: currentImageUrl, items }),
+      body: JSON.stringify({ shop_name: batch.shopName, image_url: batch.imageUrl, items }),
     });
     const data = await res.json();
 
     if (!res.ok) {
-      recordStatusEl.innerHTML = `<div class="error">Error: ${data.error || "Unknown error"}</div>`;
-      refreshSaveButtonState(); // re-enable if there's still something to (re)try
+      recordStatusEl.innerHTML = `<div class="error">Error: ${escapeHtml(data.error || "Unknown error")}</div>`;
+      refreshSaveButtonState(batch);
       return;
     }
 
-    // Remember exactly what was saved for each of these rows, and mark them visually
     rowsToSave.forEach(row => {
-      const i = row.dataset.row;
-      savedSnapshots[i] = getRowCorrected(row);
+      batch.savedSnapshots[row.dataset.row] = getRowCorrected(row);
       row.classList.add("row-saved");
     });
-
     recordStatusEl.textContent = `Saved ${data.items_saved} item(s) to the database. Logged ${data.corrections_logged} correction(s) for future accuracy. Select or edit more to save additional items.`;
-    refreshSaveButtonState(); // disables again unless something else still needs saving
+    refreshSaveButtonState(batch);
   } catch (err) {
-    recordStatusEl.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
-    refreshSaveButtonState();
+    recordStatusEl.innerHTML = `<div class="error">Request failed: ${escapeHtml(err.message)}</div>`;
+    refreshSaveButtonState(batch);
   }
 }
 
