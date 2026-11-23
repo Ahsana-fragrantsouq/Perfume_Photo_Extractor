@@ -3,9 +3,10 @@ import base64
 import json
 import re
 import io
+from datetime import datetime
 from functools import wraps
 
-from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for, send_file
 from werkzeug.security import check_password_hash
 from PIL import Image, ImageOps
 import pillow_heif
@@ -426,6 +427,54 @@ def admin_data():
         recorded_items=recorded_items,
         corrections=corrections,
     )
+
+
+@app.route("/admin/export-excel")
+@login_required
+def admin_export_excel():
+    """Downloads an Excel file with three sheets: Master Table, Recorded Items, Corrections Log."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    try:
+        sheets = [
+            ("Master Table", db.get_master_items(limit=100000),
+             ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "product_name", "image_url", "updated_at"]),
+            ("Recorded Items", db.get_recorded_items(limit=100000),
+             ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "created_at"]),
+            ("Corrections Log", db.get_all_corrections(limit=100000),
+             ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"]),
+        ]
+    except Exception as e:
+        return f"Database error: {str(e)}", 502
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    for title, rows, columns in sheets:
+        ws = wb.create_sheet(title)
+        ws.append(columns)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        for row in rows:
+            values = []
+            for col in columns:
+                v = row.get(col) if hasattr(row, "get") else row[col]
+                if isinstance(v, datetime) and v.tzinfo is not None:
+                    v = v.replace(tzinfo=None)   # Excel can't store timezones
+                values.append(v)
+            ws.append(values)
+        ws.freeze_panes = "A2"
+        for i, col in enumerate(columns, start=1):
+            width = max([len(str(col))] + [len(str(r.get(col) if hasattr(r, "get") else r[col] or "")) for r in rows[:200]])
+            ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(max(width + 2, 8), 50)
+        print(f"[export] Sheet '{title}': {len(rows)} row(s)")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"perfume-saved-data-{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    return send_file(buf, as_attachment=True, download_name=filename,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.route("/admin/create-in-airtable", methods=["POST"])

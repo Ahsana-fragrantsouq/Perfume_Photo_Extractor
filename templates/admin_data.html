@@ -27,6 +27,9 @@
   .status-msg { margin-top: 10px; font-size: 13px; }
   .status-ok { color: #1a7a1a; }
   .status-error { color: #b00020; }
+  .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .export-btn { background: #0a7a3d; color: #fff; text-decoration: none; padding: 10px 18px; border-radius: 6px; font-size: 14px; white-space: nowrap; }
+  .export-btn:hover { background: #086531; }
   .table-scroll { overflow-x: auto; }   /* wide tables scroll sideways on phones */
 
   @media (max-width: 700px) {
@@ -38,8 +41,13 @@
 </head>
 <body>
 
-<h1>Saved Data</h1>
-<p style="margin-top:-10px;"><a href="{{ url_for('logout') }}">Log out</a></p>
+<div class="page-head">
+  <div>
+    <h1>Saved Data</h1>
+    <p style="margin-top:-10px;"><a href="{{ url_for('logout') }}">Log out</a></p>
+  </div>
+  <a href="{{ url_for('admin_export_excel') }}" class="export-btn" id="exportBtn">Export excel</a>
+</div>
 
 <!--
 DISABLED — Full Reset section. Backend route (/admin/clear-all in app.py,
@@ -121,6 +129,8 @@ the "Full reset" JS block further down.
 {{ render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"], {}, "corrections") }}
 
 <script>
+document.getElementById("exportBtn").addEventListener("click", () => console.log("[export] Downloading Excel file of all saved data"));
+
 // Highlight SKU cells that have been changed from their original value
 document.querySelectorAll(".sku-input").forEach(input => {
   input.addEventListener("input", () => {
