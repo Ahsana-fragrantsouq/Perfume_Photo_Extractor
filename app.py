@@ -429,20 +429,34 @@ def admin_data():
     )
 
 
-@app.route("/admin/export-excel")
+@app.route("/admin/export-excel", methods=["GET", "POST"])
 @login_required
 def admin_export_excel():
-    """Downloads an Excel file with three sheets: Master Table, Recorded Items, Corrections Log."""
+    """Downloads an Excel file (Master Table, Recorded Items, Corrections Log sheets).
+    GET  -> every row.
+    POST {"selected": {"master_table": [ids], "recorded_items": [ids], "corrections": [ids]}}
+         -> only the ticked rows (tables with nothing ticked are left out)."""
+    selected = None
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        selected = {}
+        for table, ids in (body.get("selected") or {}).items():
+            try:
+                selected[table] = {int(i) for i in ids}
+            except (ValueError, TypeError):
+                return jsonify({"error": "ids must be integers"}), 400
+        print(f"[export] Selected rows: { {t: len(i) for t, i in selected.items()} }")
+
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
     try:
         sheets = [
-            ("Master Table", db.get_master_items(limit=100000),
+            ("master_table", "Master Table", db.get_master_items(limit=100000),
              ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "sku", "product_name", "image_url", "updated_at"]),
-            ("Recorded Items", db.get_recorded_items(limit=100000),
+            ("recorded_items", "Recorded Items", db.get_recorded_items(limit=100000),
              ["id", "shop_name", "brand", "name", "size", "concentration", "gender", "condition", "created_at"]),
-            ("Corrections Log", db.get_all_corrections(limit=100000),
+            ("corrections", "Corrections Log", db.get_all_corrections(limit=100000),
              ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"]),
         ]
     except Exception as e:
@@ -450,7 +464,13 @@ def admin_export_excel():
 
     wb = Workbook()
     wb.remove(wb.active)
-    for title, rows, columns in sheets:
+    for table_key, title, rows, columns in sheets:
+        if selected is not None:
+            if not selected.get(table_key):
+                continue                      # nothing ticked in this table
+            rows = [r for r in rows if r["id"] in selected[table_key]]
+            if not rows:
+                continue
         ws = wb.create_sheet(title)
         ws.append(columns)
         for c in ws[1]:
@@ -468,6 +488,9 @@ def admin_export_excel():
             width = max([len(str(col))] + [len(str(r.get(col) if hasattr(r, "get") else r[col] or "")) for r in rows[:200]])
             ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(max(width + 2, 8), 50)
         print(f"[export] Sheet '{title}': {len(rows)} row(s)")
+
+    if not wb.sheetnames:
+        return jsonify({"error": "No matching rows to export."}), 400
 
     buf = io.BytesIO()
     wb.save(buf)

@@ -28,7 +28,7 @@
   .status-ok { color: #1a7a1a; }
   .status-error { color: #b00020; }
   .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-  .export-btn { background: #0a7a3d; color: #fff; text-decoration: none; padding: 10px 18px; border-radius: 6px; font-size: 14px; white-space: nowrap; }
+  .export-btn { background: #0a7a3d; color: #fff; padding: 10px 18px; border-radius: 6px; font-size: 14px; white-space: nowrap; }
   .export-btn:hover { background: #086531; }
   .table-scroll { overflow-x: auto; }   /* wide tables scroll sideways on phones */
 
@@ -46,7 +46,7 @@
     <h1>Saved Data</h1>
     <p style="margin-top:-10px;"><a href="{{ url_for('logout') }}">Log out</a></p>
   </div>
-  <a href="{{ url_for('admin_export_excel') }}" class="export-btn" id="exportBtn">Export excel</a>
+  <div style="text-align:right;"><button type="button" class="export-btn" id="exportBtn">Export excel</button><div id="exportMsg" class="status-msg"></div></div>
 </div>
 
 <!--
@@ -129,7 +129,53 @@ the "Full reset" JS block further down.
 {{ render_table(corrections, ["id", "shop_name", "item_context", "field_name", "original_value", "corrected_value", "created_at"], {}, "corrections") }}
 
 <script>
-document.getElementById("exportBtn").addEventListener("click", () => console.log("[export] Downloading Excel file of all saved data"));
+// Export excel: only the ticked rows (all rows if nothing is ticked)
+document.getElementById("exportBtn").addEventListener("click", async () => {
+  const msg = document.getElementById("exportMsg");
+  const selected = {};
+  let count = 0;
+  document.querySelectorAll(".row-check:checked").forEach(cb => {
+    (selected[cb.dataset.table] = selected[cb.dataset.table] || []).push(parseInt(cb.dataset.id, 10));
+    count++;
+  });
+  console.log(`[export] ${count} ticked row(s)`, selected);
+
+  if (count === 0) {
+    msg.textContent = "Nothing ticked - exporting all rows...";
+    msg.className = "status-msg";
+    window.location.href = "/admin/export-excel";
+    return;
+  }
+
+  msg.textContent = `Exporting ${count} selected row(s)...`;
+  msg.className = "status-msg";
+  try {
+    const res = await fetch("/admin/export-excel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selected }),
+    });
+    if (!res.ok) {
+      let err = "Export failed";
+      try { err = (await res.json()).error || err; } catch (_) {}
+      msg.textContent = `Error: ${err}`;
+      msg.className = "status-msg status-error";
+      return;
+    }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `perfume-selected-items-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    msg.textContent = `Exported ${count} row(s).`;
+    msg.className = "status-msg status-ok";
+  } catch (err) {
+    msg.textContent = `Request failed: ${err.message}`;
+    msg.className = "status-msg status-error";
+  }
+});
 
 // Highlight SKU cells that have been changed from their original value
 document.querySelectorAll(".sku-input").forEach(input => {
