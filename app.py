@@ -500,6 +500,34 @@ def admin_export_excel():
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+@app.route("/admin/fix-record-ids")
+@login_required
+def admin_fix_record_ids():
+    """One-time repair page: gives old 'PE-...' item ids the 'rec...' shape the website accepts.
+    /admin/fix-record-ids        -> shows how many need fixing (changes nothing)
+    /admin/fix-record-ids?run=1  -> fixes them"""
+    run = request.args.get("run") == "1"
+    try:
+        result = competitor_client.fix_record_ids(run=run)
+    except Exception as e:
+        return f"Error: {e}", 502
+
+    rows = "".join(f"<tr><td>{i}</td><td>{s_}</td><td>{n or ''}</td></tr>" for i, s_, n in result["recent"])
+    if run:
+        headline = f"Fixed {result['fixed']} item(s). Still old-style: {result['old_style'] - result['fixed']}."
+        action = ""
+    elif result["old_style"]:
+        headline = f"{result['old_style']} item(s) still have an old PE- id."
+        action = '<p><a href="/admin/fix-record-ids?run=1" style="background:#0a7a3d;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;">Fix them now</a></p>'
+    else:
+        headline = "All good - no items with an old PE- id."
+        action = ""
+    return (f'<body style="font-family:Arial;margin:30px"><h2>{headline}</h2>{action}'
+            f'<h3>Newest items created by Perfume Extractor</h3>'
+            f'<table border="1" cellpadding="6" style="border-collapse:collapse"><tr><th>fi_record_id</th><th>SKU</th><th>Product</th></tr>{rows}</table>'
+            f'<p><a href="/admin/data">Back to Saved Data</a></p></body>')
+
+
 @app.route("/admin/create-in-airtable", methods=["POST"])
 @api_login_required
 def admin_create_in_airtable():

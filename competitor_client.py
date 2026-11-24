@@ -8,6 +8,8 @@ same return shapes, so app.py only needs its import/calls swapped.
 """
 
 import os
+import secrets
+import string
 import psycopg2
 
 # Connection string for the Competitor table app's OWN database — set this in
@@ -241,7 +243,10 @@ def create_record(brand, name, size, concentration, gender):
         sku = sku_result["sku"]
         product_name = _build_product_name(brand, name, size, concentration, gender)
         # Synthetic id — this row has no real Airtable record behind it.
-        fi_record_id = f"PE-{sku}"
+        # The website only accepts ids that look like Airtable ids ("rec" + 14 letters/digits),
+        # so generate one of that shape. The source column still says "perfume_extractor".
+        alphabet = string.ascii_letters + string.digits
+        fi_record_id = "rec" + "".join(secrets.choice(alphabet) for _ in range(14))
 
         print(f"[competitor_db] Creating new item_master row: sku={sku!r} brand={brand!r} name={name!r}")
 
@@ -269,3 +274,38 @@ def create_record(brand, name, size, concentration, gender):
             conn.rollback()
             conn.close()
         return {"status": "failed"}
+
+
+def _new_record_id():
+    """Airtable-style id: 'rec' + 14 letters/digits (the shape the website accepts)."""
+    alphabet = string.ascii_letters + string.digits
+    return "rec" + "".join(secrets.choice(alphabet) for _ in range(14))
+
+
+def fix_record_ids(run=False):
+    """One-time repair: rows created by Perfume Extractor earlier have ids like
+    'PE-GBG1065', which the website refuses. With run=False this only COUNTS them
+    (and lists the newest Perfume Extractor rows); with run=True it gives each a
+    new 'rec...' id. Returns {"old_style": N, "fixed": N, "recent": [(id, sku, name), ...]}."""
+    if not DATABASE_URL:
+        raise RuntimeError("COMPETITOR_DATABASE_URL not set")
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT fi_record_id, sku FROM item_master WHERE fi_record_id LIKE 'PE-%'")
+        old_rows = cur.fetchall()
+        print(f"[competitor_db] Found {len(old_rows)} row(s) with old PE- ids")
+        fixed = 0
+        if run:
+            for old_id, sku in old_rows:
+                new_id = _new_record_id()
+                cur.execute("UPDATE item_master SET fi_record_id = %s WHERE fi_record_id = %s", (new_id, old_id))
+                print(f"[competitor_db] {old_id} (SKU {sku}) -> {new_id}")
+                fixed += cur.rowcount
+            conn.commit()
+        cur.execute("""SELECT fi_record_id, sku, product_name FROM item_master
+                       WHERE source = 'perfume_extractor' ORDER BY loaded_at DESC LIMIT 10""")
+        recent = cur.fetchall()
+        return {"old_style": len(old_rows), "fixed": fixed, "recent": recent}
+    finally:
+        conn.close()
